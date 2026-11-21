@@ -167,6 +167,8 @@ Ronda 2 (10 s después): vuelve a preguntar + 5 s
 
 **Regla única:** si el modelo principal se demora, se lanza el respaldo **en paralelo** y se usa el primero que conteste. El respaldo debe ser más rápido y de **otro proveedor**.
 
+**Decidido el 20 nov (Fabian):** para voz a texto y texto a voz se usa **solo ElevenLabs**, sin segundo proveedor, para no complicar. Si falla o se demora, se pasa directo al Plan C de la tabla. El respaldo de otro proveedor aplica solo al modelo de IA (JSON), y solo si se elige uno en CJ-12. Créditos de ElevenLabs al 20 nov: ~8,600; una caída completa gasta unos 150.
+
 | Paso | Lanza respaldo a los | Se rinde a los | Plan C |
 |---|---|---|---|
 | Voz a texto | 2 s | 4 s | Seguir con `"transcript": null` |
