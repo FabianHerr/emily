@@ -240,6 +240,8 @@ export const getFallContext = internalQuery({
       personName: v.string(),
       familyNames: v.array(v.string()),
       audioId: v.union(v.id("_storage"), v.null()),
+      // An emergency already went out (or was decided) for this incident.
+      emergencySent: v.boolean(),
     }),
   ),
   handler: async (ctx, args) => {
@@ -262,17 +264,23 @@ export const getFallContext = internalQuery({
       positionChanged: incident.position_changed,
       personName: device?.personName ?? incident.deviceId,
       familyNames: members.map((m) => m.name),
-      audioId: audioIds.length >= args.round ? audioIds[audioIds.length - 1] : null,
+      // This round's own clip: a late round 1 must not transcribe the round-2 clip.
+      audioId: audioIds.length >= args.round ? audioIds[args.round - 1] : null,
+      emergencySent:
+        incident.status === "emergency" || incident.decision?.level === "emergency",
     };
   },
 });
 
-// Called by processFall once the decision is made. Level "none" closes the incident,
-// but never one that is already an emergency or acknowledged: closing those would
-// leave the repeating emergency alerts ringing with no way to stop them from /ack.
+// Called by processFall once the decision is made. Level "none" closes the incident
+// only when it is final: not when the watch will ask again (a closed incident would
+// silence round 2's emergency), not when a newer round already arrived (a late round 1
+// must not close it under round 2), and never one that is already an emergency or
+// acknowledged (the repeating alerts could no longer be stopped from /ack).
 export const saveDecision = internalMutation({
   args: {
     incidentId: v.id("incidents"),
+    round: v.union(v.literal(1), v.literal(2)),
     transcript: v.union(v.string(), v.null()),
     decision: storedDecisionValidator,
   },
@@ -280,11 +288,14 @@ export const saveDecision = internalMutation({
   handler: async (ctx, args) => {
     const incident = await ctx.db.get("incidents", args.incidentId);
     if (!incident) return null;
+    // A late round 1 must not overwrite round 2's decision either.
+    if (incident.round > args.round) return null;
+    const isFinalNone = args.decision.level === "none" && !args.decision.ask_again;
     const canClose = incident.status === "asking" || incident.status === "precautionary";
     await ctx.db.patch("incidents", incident._id, {
       transcript: args.transcript,
       decision: args.decision,
-      ...(args.decision.level === "none" && canClose && { status: "closed" as const }),
+      ...(isFinalNone && canClose && { status: "closed" as const }),
     });
     return null;
   },

@@ -62,6 +62,7 @@ type FallContext = {
   personName: string;
   familyNames: string[];
   audioId: Id<"_storage"> | null;
+  emergencySent: boolean;
 } | null;
 
 type ClaudeInput = {
@@ -202,8 +203,14 @@ export const processFall = internalAction({
   handler: async (ctx, args): Promise<null> => {
     const { incidentId, round } = args;
     let impactMaxG: number | null = null;
+    // True once an emergency is out for this incident (an earlier round, a retry, or
+    // this run): a second repeating emergency would ring the phones twice.
     let emergencyScheduled = false;
     const alert = async (level: "precautionary" | "emergency", message: string) => {
+      if (level === "emergency" && emergencyScheduled) {
+        console.log(`processFall: emergency already sent for ${incidentId}, not sending again`);
+        return;
+      }
       await ctx.scheduler.runAfter(0, internal.notify.sendAlert, { incidentId, level, message });
       if (level === "emergency") emergencyScheduled = true;
     };
@@ -218,14 +225,10 @@ export const processFall = internalAction({
         return null;
       }
       impactMaxG = fall.impactMaxG;
+      emergencyScheduled = fall.emergencySent;
 
       // The watch sent no clip for this round: same as before CJ-13, a fixed emergency.
       if (fall.audioId === null) {
-        // A round 2 never re-alerted before CJ-13: skip the copy if round 1 already did.
-        if (round === 2 && fall.status === "emergency") {
-          console.log(`processFall: round 2 without audio, emergency already sent`);
-          return null;
-        }
         await alert("emergency", impactMessage(fall.impactMaxG));
         return null;
       }
@@ -266,6 +269,7 @@ export const processFall = internalAction({
 
       await ctx.runMutation(internal.incidents.saveDecision, {
         incidentId,
+        round,
         transcript: stt.transcript,
         decision: { ...decision, source, sttMs: stt.ms, aiMs },
       });
