@@ -30,7 +30,13 @@ export default defineSchema({
     seconds_still: v.number(),
     position_changed: v.boolean(),
     model_confidence: v.number(),
-    audioIds: v.array(v.id("_storage")), // one per round that had audio
+    // Each round's own clip: round 2's clip must not be read as round 1's when round 1
+    // had none (no WiFi, or round 2 created the incident).
+    round1AudioId: v.optional(v.id("_storage")),
+    round2AudioId: v.optional(v.id("_storage")),
+    // Legacy (rows before round1AudioId/round2AudioId): one per round that had audio,
+    // in arrival order. Read only as a fallback, no longer written.
+    audioIds: v.optional(v.array(v.id("_storage"))),
     transcript: v.optional(v.union(v.string(), v.null())),
     decision: v.optional(v.any()), // the AI's JSON (CJ-13)
     receipts: v.array(v.string()), // Pushover receipts (CJ-7)

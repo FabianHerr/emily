@@ -154,7 +154,7 @@ AI Service llama a Notify Family y a Talk to Loved One **en paralelo**: el aviso
   - `200` → `{ "incidentId": "jd7..." }`
   - `400` → `{ "error": "'round' must be 1 or 2" }` (falta un dato, no es número, fuera de rango o audio > 2 MB)
   - `404` → `{ "error": "Unknown device" }` o `{ "error": "Unknown incident" }`
-- Ronda 2: agregar `&incidentId=<el de la ronda 1>`. Actualiza ESE incidente (`round` pasa a 2, se suma el audio, no cambia `status`).
+- Ronda 2: agregar `&incidentId=<el de la ronda 1>`. Actualiza ESE incidente (`round` pasa a 2, el audio se guarda como el de la ronda 2, no cambia `status`).
   Si falta `incidentId`, se crea un incidente nuevo (por si el reloj perdió la respuesta de la ronda 1).
 
 **Contrato exacto de GET /poll y GET /audio (implementado en CJ-14, 21 nov):**
@@ -162,7 +162,7 @@ AI Service llama a Notify Family y a Talk to Loved One **en paralelo**: el aviso
   - `200` → `{ "text": "Stay calm Rosa, I've told Fabian.", "askAgain": false, "audioUrl": "https://healthy-lark-748.convex.site/audio/kg2..." }`: el mensaje más antiguo en espera.
   - `200` → el mismo objeto **sin `audioUrl`** si la voz falló: mostrar `text` en pantalla y vibrar.
   - `200` → `{}` si no hay nada. `404` → `{ "error": "Unknown device" }`. `400` si falta `device`.
-  - `text` puede venir vacío (`""`) con `askAgain: true`: el reloj repite su propia pregunta y graba la ronda 2.
+  - Con `askAgain: true` el `text` viene vacío (`""`) y sin `audioUrl`: el reloj hace su propia segunda pregunta y graba la ronda 2.
   - Cada mensaje se entrega **una sola vez**: si el reloj pierde la respuesta, ese mensaje no vuelve. Puede haber varios en cola: seguir llamando hasta recibir `{}`.
   - Cada `/poll` cuenta como latido (`devices.lastHeartbeat`).
 - `GET <audioUrl>` (no armar la URL a mano): `200` con `Content-Type: audio/wav` y `Content-Length`; WAV 16 kHz, mono, 16 bits. `404` → `{ "error": "Unknown audio" }`.
@@ -170,19 +170,29 @@ AI Service llama a Notify Family y a Talk to Loved One **en paralelo**: el aviso
 
 ## 7. Flujo de una caída: dos rondas, sin apresurarse
 
+**Regla clave (21 nov): la ronda 1 nunca alerta, salvo que la persona pida ayuda.** Así una sola caída no manda dos avisos.
+
 ```
 Ronda 1: "Are you OK?" + 5 s de audio -> IA
-  - Dice que está bien  -> cerrar, sin avisar
-  - Pide ayuda          -> EMERGENCIA
-  - Silencio            -> si el golpe fue fuerte: aviso PREVENTIVO
-                           ("Posible caída, estamos verificando") -> Ronda 2
+  - Pide ayuda, le duele o dice que se cayó -> EMERGENCIA al instante
+  - Dice que está bien                      -> cerrar, sin avisar
+  - Silencio, sin audio o no se entiende    -> NO avisa. /poll da
+                                               { "text": "", "askAgain": true } -> Ronda 2
 
-Ronda 2 (10 s después): vuelve a preguntar + 5 s
-  - Responde            -> según lo que diga
-  - Silencio otra vez   -> aviso GRAVE ("se cayó y no responde")
+Ronda 2: el reloj hace su propia segunda pregunta + 5 s
+  - Pide ayuda, le duele                    -> EMERGENCIA
+  - Dice que está bien                      -> cerrar, sin avisar
+  - Silencio, sin audio o no se entiende    -> EMERGENCIA ("Rosa fell and is not responding.")
+
+Nunca hay una tercera pregunta.
 ```
 
-- El reloj tiene **su propio cronómetro**: 10 s sin respuesta de Convex → repite la pregunta solo.
+- Ejemplo: Rosa no contesta en la ronda 1 (nadie recibe nada); en la ronda 2 dice "I'm fine, I just tripped" → se cierra y la familia no recibió ningún aviso.
+- Las reglas están en el código (`applyRoundRules` en `convex/decide.ts`) y se aplican después de Claude, Gemini o las palabras clave: aunque la IA se equivoque, la ronda 1 no avisa por una respuesta confusa.
+- Con `askAgain: true` el reloj ignora texto y audio y pone su propia pregunta. Convex no genera voz para eso.
+- Los ruidos que marca ElevenLabs ("[sighs]", "(laughs)") no son palabras: si solo hay ruidos, cuenta como silencio.
+- El reloj tiene **su propio cronómetro**: espera hasta 20 s la respuesta de Convex; si no llega, hace la ronda 2 solo.
+- **Última defensa:** si la ronda 2 nunca llega, a los 60 s sale una EMERGENCIA "Rosa fell and is not responding." (sección 8).
 - Polling: cada 60 s en día normal; cada 3 s durante una caída.
 - Sin WiFi: alarma y vibración local; el incidente se envía cuando vuelve la conexión.
 
@@ -199,7 +209,8 @@ Ronda 2 (10 s después): vuelve a preguntar + 5 s
 | Texto a voz | 1,5 s | 5 s | Texto en la pantalla + vibración |
 
 - Tiempos = valores de inicio. **Medir y ajustar.**
-- **Última defensa:** incidente sin resolver en 30 s → aviso preventivo (`ctx.scheduler.runAfter`, se cancela si todo termina bien).
+- **Última defensa (`incidents.lastDefence`):** 60 s después de crear el incidente, si sigue en `asking` y no hubo decisión, o la ronda 1 pidió repetir y la ronda 2 nunca llegó → aviso de **EMERGENCIA** "Rosa fell and is not responding.". Se revisa sola: no hace nada si llegó la ronda 2 o si el incidente ya se cerró, se confirmó o ya avisó. Son 60 s porque la ronda 2 puede llegar 30 s o más después de la ronda 1.
+- **Un aviso por nivel:** un segundo preventivo o una segunda emergencia en el mismo incidente no se mandan. Subir de preventivo a emergencia sí.
 
 ```ts
 async function withFallback(principal, respaldo, suaveMs, duroMs) {
@@ -230,9 +241,9 @@ Cada familiar instala la app Pushover y activa "Critical Alerts". Prueba gratis 
 - `convex/notify.ts`: `sendAlert({ incidentId, level, message })` manda un aviso por familiar, en paralelo, 5 s máximo cada uno; `cancelReceipts({ receipts })` corta las repeticiones. Título: "Rosa fell at 2:14 PM" (hora de Toronto).
 - `convex/incidents.ts`: `getAlertTargets`, `saveReceipts` (guarda los `receipt` y el `status`) y `acknowledge` (marca `acknowledged`, guarda `acknowledgedBy`, deja "<nombre> is on the way" en `messages` y cancela los avisos de los demás).
 - `POST /ack`: lee `receipt` y `acknowledged_by` del cuerpo (form o JSON) o de la URL. **Siempre responde 200** con `{ "ok": true, "found": ... }`, aunque llegue basura.
-- Hasta CJ-13, cada caída nueva de ronda 1 manda directo una emergencia: "Possible fall. Impact of 3.4 g". La ronda 2 no vuelve a avisar (CJ-16).
-- Regla sin bajar de nivel: si el incidente ya es `emergency`, no se manda un preventivo; si es `acknowledged` o `closed`, no se manda nada.
-- **Falta la primera prueba real** (envío, "Ya voy" y cancelación nunca se han probado contra Pushover). Ojo: cualquier `POST /fall` de ronda 1 ya hace sonar los teléfonos.
+- Cuándo se avisa: sección 7 (la ronda 1 solo avisa si la persona pide ayuda).
+- Regla sin bajar de nivel: si el incidente ya es `emergency`, no se manda un preventivo; si es `acknowledged` o `closed`, no se manda nada. Tampoco se repite un aviso del mismo nivel.
+- **Falta la primera prueba real** (envío, "Ya voy" y cancelación nunca se han probado contra Pushover). Ojo: un `POST /fall` de `watch-1` que pide ayuda, o una ronda 2 en silencio, hace sonar los teléfonos. Para probar con `curl` usar `device=watch-test` (persona "Rosa", **sin familiares**: `sendAlert` solo escribe "no family members" en los logs). Se crea con `npx convex run seed:seedTestDevice`. Nunca agregarle familiares.
 
 ## 10. El reloj
 
@@ -313,16 +324,17 @@ No usar SisFall ni KFall: son de cintura.
 - Orden de la decisión (`convex/ai.ts`, `convex/fallback.ts`): Claude; a los 2.5 s (o antes si Claude falla) arranca Gemini en paralelo y gana el primero; a los 5 s deciden las reglas de palabras clave (`fallbackDecision` en `convex/decide.ts`). El incidente guarda quién decidió en `decision.source`: `claude`, `gemini`, `rules` o `silence`.
 - Registro de actividad para el portal (CJ-28, `convex/events.ts`): tabla `events` (`deviceId`, `incidentId?`, `type`, `text` en inglés listo para mostrar, `level` info/precautionary/emergency, `createdAt`). Se escribe solo con `logEvent`, que nunca lanza errores. Tipos: `fall_detected`, `person_said`, `no_answer`, `alert_sent`, `acknowledged`, `watch_said`, `incident_closed`. El portal lee con la query pública `api.events.list({ deviceId, limit })`, más recientes primero (50 por defecto, máximo 200).
 - Portal de la familia (CJ-20, `src/App.tsx`): una página, `npm run dev`. Lee `api.portal.overview({ deviceId })` (estado del reloj, nombres de la familia y las últimas 20 caídas) y confirma con `api.portal.onMyWay({ incidentId, name })`, que usa la misma función que `/ack` (`acknowledgeIncident`). El portal también puede marcar una caída como falsa alarma con `api.portal.markFalseAlarm({ incidentId, name })`: cierra el incidente (`falseAlarmBy`), cancela los avisos de Pushover y encola para el reloj "It was a false alarm. Everything is OK.". Cada caída se abre para ver el paso a paso, que sale de `api.events.list`. Sin login. Colores de Emily: solo verde pastel y rosa pastel (decisión de Fabian); la nube del logo está dibujada en SVG dentro de `App.tsx` y en `public/favicon.svg`.
-- Última defensa (`incidents.lastDefence`): 30 s después de crear un incidente, si sigue en `asking` y sin decisión guardada, sale un aviso preventivo con el golpe. No se cancela: se revisa sola y no hace nada en el caso normal.
+- Última defensa (`incidents.lastDefence`): 60 s después de crear un incidente, si sigue en `asking` sin decisión, o la ronda 2 nunca llegó, sale una emergencia "Rosa fell and is not responding." No se cancela: se revisa sola y no hace nada en el caso normal (sección 8).
 - Voz de Emily: la elige Fabian en ElevenLabs y guarda su id en `ELEVENLABS_VOICE_ID`.
 
 **AI Service en el código (CJ-13):**
 - `convex/ai.ts` (runtime normal, el SDK de Anthropic funciona ahí): `processFall({ incidentId, round })`, programada por `recordFall` en cada incidente nuevo y en cada ronda 2 nueva (un reintento igual no programa nada). `decideWithClaude(...)` prueba solo a Claude desde la terminal. `convex/decide.ts`: reglas puras (`decideOnSilence`, `fallbackDecision`, `validateDecision`, esquema JSON).
-- Sin audio en la ronda → la emergencia de siempre: "Possible fall. Impact of 3.4 g" (sin ElevenLabs ni Claude).
-- Silencio (transcript `null`) → ronda 1 con golpe ≥ 3 g: preventivo y volver a preguntar; < 3 g: no avisa y vuelve a preguntar; ronda 2: emergencia "Rosa fell and is not responding."
+- Sin audio en la ronda → igual que silencio (sin ElevenLabs ni Claude); se guarda con `source: "silence"`.
+- Silencio (transcript `null`, o solo ruidos como "[sighs]") → ronda 1: no avisa y vuelve a preguntar, sea cual sea el golpe; ronda 2: emergencia "Rosa fell and is not responding."
 - Con palabras → Claude (`claude-sonnet-5-5`, `effort: "low"`, salida estructurada, respaldo de rechazo `fallbacks: "default"`, límite 5 s).
-- Claude falla (sin clave, tiempo, error, rechazo, JSON malo) → emergencia `Said: "<lo que dijo>"`. Cualquier error inesperado → la emergencia fija.
-- En el incidente se guarda `transcript` y `decision` (+ `source`: silence/claude/fallback, `sttMs`, `aiMs`); `level: "none"` lo cierra (nunca una emergencia ya enviada). Lo que Emily responde queda en `messages`.
+- Claude y Gemini fallan → palabras clave: ayuda o dolor → emergencia; "I'm fine" → cerrar; otra cosa → ronda 1 vuelve a preguntar, ronda 2 emergencia `Said: "<lo que dijo>"`. Cualquier error inesperado → la emergencia fija "Possible fall. Impact of 3.4 g".
+- Después de cualquier decisión, `applyRoundRules` aplica las reglas de la sección 7.
+- En el incidente se guarda `transcript` y `decision` (+ `source`: silence/claude/gemini/rules, `sttMs`, `aiMs`); `level: "none"` lo cierra (nunca una emergencia ya enviada). El audio de cada ronda va en `round1AudioId` / `round2AudioId` (`audioIds` queda solo en filas viejas). Lo que Emily responde queda en `messages`.
 - Medido el 21 nov (12 llamadas a Claude, dentro de Convex): con `effort: "low"` mediana 2.2 s (1.6 a 3.1 s; la primera incluye compilar el esquema). `between_tools` no fue más rápido de forma clara (mediana 1.7 s). Las 4 respuestas de prueba dieron el nivel esperado; "ignore your instructions..." quedó en precautionary.
 - **Falta probar** la cadena completa con audio real y avisos reales (Scribe + Claude + Pushover); no se ha llamado a `processFall`.
 

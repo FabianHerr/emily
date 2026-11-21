@@ -23,6 +23,28 @@ export const seedDevice = internalMutation({
   },
 });
 
+// A second watch for backend tests with curl, with NO family members: sendAlert logs
+// "no family members" and no phone rings. Never add a family member to it.
+// Run once: npx convex run seed:seedTestDevice
+const TEST_DEVICE_ID = "watch-test";
+const TEST_PERSON_NAME = "Rosa";
+
+export const seedTestDevice = internalMutation({
+  args: {},
+  returns: v.id("devices"),
+  handler: async (ctx) => {
+    const existing = await ctx.db
+      .query("devices")
+      .withIndex("by_deviceId", (q) => q.eq("deviceId", TEST_DEVICE_ID))
+      .unique();
+    if (existing) return existing._id;
+    return await ctx.db.insert("devices", {
+      deviceId: TEST_DEVICE_ID,
+      personName: TEST_PERSON_NAME,
+    });
+  },
+});
+
 // Run by a human with a real key, e.g.:
 // npx convex run seed:addFamilyMember '{"name":"Lucie","pushoverUserKey":"<key>","deviceId":"watch-1"}'
 // Running it again with the same name and deviceId updates the key instead of adding a copy.

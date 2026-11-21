@@ -7,13 +7,12 @@ import { v } from "convex/values";
 import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
 import { internalAction } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
+import { speechOrNull } from "./decide";
 
 // Speech to text (HANDOFF.md section 8: give up at 4 s, continue with transcript null).
 const STT_TIMEOUT_MS = 4000;
 const STT_MODEL_ID = "scribe_v2";
 const STT_LANGUAGE_CODE = "en";
-// The API has no silence flag: fewer letters than this counts as silence.
-const MIN_TRANSCRIPT_LETTERS = 3;
 
 // Text to speech (HANDOFF.md section 8: on timeout the watch shows text instead).
 // v4 turbo measured 0.9-1.1 s warm (flash: 0.4 s, but a flatter voice). 5 s leaves
@@ -53,10 +52,6 @@ async function withTimeout<T>(
   } finally {
     clearTimeout(timer);
   }
-}
-
-function countLetters(text: string): number {
-  return (text.match(/\p{L}/gu) ?? []).length;
 }
 
 type Bytes = Uint8Array<ArrayBuffer>;
@@ -122,8 +117,9 @@ export const transcribe = internalAction({
         ),
       );
 
-      const text = (result.text ?? "").trim();
-      const transcript = countLetters(text) < MIN_TRANSCRIPT_LETTERS ? null : text;
+      // Sound tags ("[sighs]", "(laughs)") are dropped; tags only = silence (null), so
+      // the AI is never asked about a recording with no words in it.
+      const transcript = speechOrNull(result.text ?? "");
       return { transcript, ms: Date.now() - start };
     } catch (error) {
       console.error("elevenlabs.transcribe failed:", error);

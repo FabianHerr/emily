@@ -39,10 +39,13 @@ type AlertTargets = {
   members: { name: string; pushoverUserKey: string }[];
 } | null;
 
-// No duplicate, no downgrade: an emergency is never followed by a precautionary,
-// and nothing is sent once someone acknowledged or the incident is closed.
+// No duplicate, no downgrade: one alert per incident per level (the status only takes
+// a level once that alert really went out), an emergency is never followed by a
+// precautionary, and nothing is sent once someone acknowledged or the incident is
+// closed. A precautionary can still be upgraded to an emergency.
 export function shouldSkipAlert(status: Status, level: Level): boolean {
   if (status === "acknowledged" || status === "closed") return true;
+  if (status === level) return true;
   return level === "precautionary" && status === "emergency";
 }
 

@@ -2,7 +2,7 @@ import { v } from "convex/values";
 import { internalMutation, internalQuery, type MutationCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { impactMessage } from "./decide";
+import { notRespondingMessage } from "./decide";
 import { logEvent } from "./events";
 
 // Defaults for POST /fall when the watch leaves a value out.
@@ -18,9 +18,25 @@ const UNKNOWN_ACKNOWLEDGER = "Someone";
 // A /fall that arrives this soon after an open incident on the same watch is a
 // retry (the watch lost our reply), not a new fall: reuse the incident, no new alert.
 const DEDUPE_WINDOW_MS = 60_000;
-// Last defence (HANDOFF.md section 8): a new incident with no decision after this
-// long gets a precautionary alert. processFall normally decides in under 10 s.
-const LAST_DEFENCE_MS = 30_000;
+// Last defence (HANDOFF.md section 8): a new incident with no decision, or whose round 2
+// never came, gets an emergency after this long. The watch waits up to 20 s for our
+// round-1 reply before asking round 2 on its own, so round 2 can arrive 30+ s after
+// round 1; processFall normally decides in under 10 s.
+const LAST_DEFENCE_MS = 60_000;
+
+// This round's clip, or null. Older rows only have the legacy audioIds array.
+function roundAudioId(incident: Doc<"incidents">, round: 1 | 2): Id<"_storage"> | null {
+  const own = round === 1 ? incident.round1AudioId : incident.round2AudioId;
+  return own ?? incident.audioIds?.[round - 1] ?? null;
+}
+
+// The patch that stores a clip in its round's own field.
+function audioPatch(
+  round: 1 | 2,
+  audioId: Id<"_storage">,
+): { round1AudioId: Id<"_storage"> } | { round2AudioId: Id<"_storage"> } {
+  return round === 1 ? { round1AudioId: audioId } : { round2AudioId: audioId };
+}
 
 // Called by POST /fall (convex/http.ts). Bad input never throws: it returns
 // { ok: false } so the route can answer 404 instead of 500.
@@ -63,7 +79,8 @@ export const recordFall = internalMutation({
       // Already round 2 means this is a retry (the watch lost our reply): the clip is
       // not attached twice and nothing is processed again.
       const isRetry = incident.round === 2;
-      const attachAudio = args.audioId !== undefined && !isRetry;
+      const attachAudio =
+        args.audioId !== undefined && !isRetry && roundAudioId(incident, 2) === null;
       await ctx.db.patch("incidents", id, {
         round: 2,
         impact_max_g: args.impactMaxG,
@@ -74,7 +91,7 @@ export const recordFall = internalMutation({
         ...(args.modelConfidence !== undefined && {
           model_confidence: args.modelConfidence,
         }),
-        ...(attachAudio && { audioIds: [...incident.audioIds, args.audioId!] }),
+        ...(attachAudio && audioPatch(2, args.audioId!)),
       });
       // Process the second answer (or second silence).
       if (!isRetry) {
@@ -95,13 +112,14 @@ export const recordFall = internalMutation({
           latest.status === "precautionary" ||
           latest.status === "emergency");
       if (latest !== null && isOpen && Date.now() - latest.createdAt < DEDUPE_WINDOW_MS) {
-        // Retry of a fall we already have: same incident, family already alerted.
-        // One clip per round: a retried upload is not attached twice.
-        const attachAudio = args.audioId !== undefined && latest.audioIds.length < args.round;
+        // Retry of a fall we already have: same incident, no new alert from the retry itself.
+        // One clip per round, in that round's own field: a retried upload is not attached twice.
+        const attachAudio =
+          args.audioId !== undefined && roundAudioId(latest, args.round) === null;
         const roundAdvanced = args.round === 2 && latest.round !== 2;
         await ctx.db.patch("incidents", latest._id, {
           ...(roundAdvanced && { round: 2 }),
-          ...(attachAudio && { audioIds: [...latest.audioIds, args.audioId!] }),
+          ...(attachAudio && audioPatch(args.round, args.audioId!)),
         });
         // Something new (round 2, or a clip we did not have): decide again. A pure
         // retry that changed nothing schedules nothing.
@@ -122,7 +140,8 @@ export const recordFall = internalMutation({
         seconds_still: args.secondsStill ?? DEFAULT_SECONDS_STILL,
         position_changed: args.positionChanged ?? DEFAULT_POSITION_CHANGED,
         model_confidence: args.modelConfidence ?? DEFAULT_MODEL_CONFIDENCE,
-        audioIds: args.audioId !== undefined ? [args.audioId] : [],
+        // A round 2 without incidentId keeps its clip as round 2's, not round 1's.
+        ...(args.audioId !== undefined && audioPatch(args.round, args.audioId)),
         receipts: [],
         createdAt: Date.now(),
       });
@@ -134,8 +153,8 @@ export const recordFall = internalMutation({
         level: "info",
       });
       // Hand the new incident to the AI Service, in the same transaction as the write.
-      // It transcribes, decides and alerts; with no clip it sends the fixed emergency
-      // as before. A round 2 without incidentId means round 1 never reached us.
+      // It transcribes, decides and alerts; no clip counts as silence. A round 2
+      // without incidentId means round 1 never reached us.
       await ctx.scheduler.runAfter(0, internal.ai.processFall, {
         incidentId,
         round: args.round,
@@ -152,10 +171,11 @@ export const recordFall = internalMutation({
   },
 });
 
-// Scheduled by recordFall for every new incident. Alerts if, 30 s later, the incident
-// is still "asking" and either no decision was ever saved (processFall died) or round 1
-// asked again and round 2 never came (the watch lost WiFi or crashed). Round 2 normally
-// arrives about 15 s after round 1.
+// Scheduled by recordFall for every new incident. Sends an EMERGENCY if, 60 s later,
+// the incident is still "asking" and either no decision was ever saved (processFall
+// died) or round 1 asked again and round 2 never came (the watch lost WiFi or crashed).
+// Never cancelled: it checks itself and does nothing once round 2 arrived, or the
+// incident was closed, acknowledged or alerted (status is no longer "asking").
 export const lastDefence = internalMutation({
   args: { incidentId: v.id("incidents") },
   returns: v.null(),
@@ -165,13 +185,17 @@ export const lastDefence = internalMutation({
     const noDecision = incident.decision === undefined;
     const roundTwoMissing = incident.round === 1 && incident.decision?.ask_again === true;
     if (!noDecision && !roundTwoMissing) return null;
+    const device = await ctx.db
+      .query("devices")
+      .withIndex("by_deviceId", (q) => q.eq("deviceId", incident.deviceId))
+      .unique();
     console.error(
-      `lastDefence: ${noDecision ? "no decision" : "no round 2"} for ${incident._id} after ${LAST_DEFENCE_MS} ms, alerting`,
+      `lastDefence: ${noDecision ? "no decision" : "no round 2"} for ${incident._id} after ${LAST_DEFENCE_MS} ms, sending an emergency`,
     );
     await ctx.scheduler.runAfter(0, internal.notify.sendAlert, {
       incidentId: incident._id,
-      level: "precautionary",
-      message: impactMessage(incident.impact_max_g),
+      level: "emergency",
+      message: notRespondingMessage(device?.personName ?? incident.deviceId),
     });
     return null;
   },
@@ -303,7 +327,6 @@ export const getFallContext = internalQuery({
       .query("familyMembers")
       .withIndex("by_deviceId", (q) => q.eq("deviceId", incident.deviceId))
       .take(MAX_FAMILY_MEMBERS);
-    const audioIds = incident.audioIds;
     return {
       deviceId: incident.deviceId,
       status: incident.status,
@@ -312,8 +335,9 @@ export const getFallContext = internalQuery({
       positionChanged: incident.position_changed,
       personName: device?.personName ?? incident.deviceId,
       familyNames: members.map((m) => m.name),
-      // This round's own clip: a late round 1 must not transcribe the round-2 clip.
-      audioId: audioIds.length >= args.round ? audioIds[args.round - 1] : null,
+      // This round's own clip: a late round 1 must not transcribe the round-2 clip,
+      // and round 2 must find its clip even when round 1 had none.
+      audioId: roundAudioId(incident, args.round),
       emergencySent:
         incident.status === "emergency" || incident.decision?.level === "emergency",
     };
@@ -364,7 +388,7 @@ export const saveDecision = internalMutation({
       level,
     });
     if (closes) {
-      // "precautionary" means an alert already went out (e.g. the last defence).
+      // "precautionary" means an alert already went out.
       const outcome = incident.status === "asking" ? "No alert sent." : "Incident closed.";
       await logEvent(ctx, {
         deviceId: incident.deviceId,

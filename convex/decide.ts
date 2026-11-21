@@ -1,8 +1,14 @@
 // Pure decision rules for the AI Service (convex/ai.ts). No I/O and no imports, so it
 // loads in either Convex runtime and in a plain Node script.
+//
+// Round rules (HANDOFF.md section 7), enforced by applyRoundRules after every decision:
+// - Asks for help, is hurt or fell (any round): emergency at once.
+// - Clearly fine (any round): no alert, incident closed.
+// - Silent or unclear in round 1: no alert, the watch asks its own second question.
+// - Silent or unclear in round 2: emergency. There is never a third question.
 
-// A silent person after an impact this strong gets a precautionary alert in round 1.
-export const STRONG_IMPACT_G = 3.0;
+// The API has no silence flag: a transcript with fewer letters than this is silence.
+export const MIN_TRANSCRIPT_LETTERS = 3;
 // Limits on what Claude writes (HANDOFF.md section 6).
 export const MAX_FAMILY_SUMMARY_CHARS = 200;
 export const MAX_REPLY_WORDS = 15;
@@ -41,16 +47,36 @@ const OK_PHRASES = ["i'm ok", "i'm okay", "i'm fine", "i am fine", "all good"];
 // "I'm okay but ..." must not close the incident.
 const OK_BLOCKERS = ["not", "no", "but", "don't", "except", "just"];
 const OK_MAX_WORDS = 8;
-// What Emily says back after a rules decision (no family names: rules do not know them).
+// What Emily says back after a rules decision, or when the AI gave no reply (no family
+// names: rules do not know them).
 const RULES_EMERGENCY_REPLY = "I am getting help for you.";
-const RULES_PRECAUTIONARY_REPLY = "I am letting your family know, just in case.";
 const RULES_OK_REPLY = "Good to hear. I'm here if you need me.";
 
-// Family alert when there is no transcript to quote (no clip, a crash, the last defence).
+// Family alert when processFall crashed and there is nothing better to say.
 export const impactMessage = (impactMaxG: number | null) =>
   impactMaxG === null
     ? "Possible fall."
     : `Possible fall. Impact of ${impactMaxG.toFixed(1)} g`;
+
+// Family alert when the person never answered: round 2 silent, or round 2 never came.
+export const notRespondingMessage = (personName: string) =>
+  truncateChars(`${personName} fell and is not responding.`, MAX_FAMILY_SUMMARY_CHARS);
+
+// Family alert when round 2 was unclear and the AI wrote no summary to quote.
+const unclearMessage = (personName: string) =>
+  truncateChars(`${personName} fell and did not answer clearly.`, MAX_FAMILY_SUMMARY_CHARS);
+
+// ElevenLabs tags sounds as "[sighs]", "[silence]" or "(laughs)". They are not speech:
+// drop them, and treat what is left as silence (null) when it has almost no letters.
+export function speechOrNull(raw: string): string | null {
+  const text = raw
+    .replace(/\[[^\]]*\]/g, " ")
+    .replace(/\([^)]*\)/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const letters = (text.match(/\p{L}/gu) ?? []).length;
+  return letters < MIN_TRANSCRIPT_LETTERS ? null : text;
+}
 
 export const LEVELS = ["none", "precautionary", "emergency"] as const;
 export type Level = (typeof LEVELS)[number];
@@ -105,13 +131,9 @@ function truncateWords(text: string, max: number): string {
   return words.slice(0, max).join(" ");
 }
 
-// The person did not answer (no transcript). Round 1 waits for round 2 unless the
-// impact was strong; round 2 is always an emergency.
-export function decideOnSilence(args: {
-  round: 1 | 2;
-  impactMaxG: number;
-  personName: string;
-}): Decision {
+// The person did not answer (no transcript, or no clip at all). Round 1 never alerts:
+// the watch asks again, whatever the impact. Round 2 is always an emergency.
+export function decideOnSilence(args: { round: 1 | 2; personName: string }): Decision {
   const base = {
     severity: RULE_SEVERITY,
     confidence: RULE_CONFIDENCE,
@@ -122,26 +144,61 @@ export function decideOnSilence(args: {
       ...base,
       notify: true,
       level: "emergency",
-      family_summary: truncateChars(
-        `${args.personName} fell and is not responding.`,
-        MAX_FAMILY_SUMMARY_CHARS,
-      ),
+      family_summary: notRespondingMessage(args.personName),
       ask_again: false,
     };
   }
-  if (args.impactMaxG >= STRONG_IMPACT_G) {
+  return { ...base, notify: false, level: "none", family_summary: "", ask_again: true };
+}
+
+// The round rules, in code, after any decision (Claude, Gemini, keyword rules or
+// silence), so a prompt slip can never alert on round 1 by itself or ask a third time.
+// Unclear means level "precautionary", or ask_again from the AI. An emergency always
+// wins, even with ask_again: the person asked for help. Every final decision has a
+// reply, because the watch asks round 2 on its own if no reply arrives.
+export function applyRoundRules(
+  decision: Decision,
+  round: 1 | 2,
+  personName: string,
+): Decision {
+  if (decision.level === "emergency") {
     return {
-      ...base,
+      ...decision,
       notify: true,
-      level: "precautionary",
-      family_summary: truncateChars(
-        `Possible fall. ${args.personName} has not answered yet. We are checking.`,
-        MAX_FAMILY_SUMMARY_CHARS,
-      ),
+      ask_again: false,
+      reply_to_person: decision.reply_to_person ?? RULES_EMERGENCY_REPLY,
+    };
+  }
+  const unclear = decision.level === "precautionary" || decision.ask_again;
+  if (!unclear) {
+    // A final "none": the person is fine.
+    return {
+      ...decision,
+      notify: false,
+      ask_again: false,
+      reply_to_person: decision.reply_to_person ?? RULES_OK_REPLY,
+    };
+  }
+  if (round === 1) {
+    // Ask again, quietly: the watch plays its own second question, so no reply.
+    return {
+      ...decision,
+      notify: false,
+      level: "none",
+      family_summary: "",
+      reply_to_person: null,
       ask_again: true,
     };
   }
-  return { ...base, notify: false, level: "none", family_summary: "", ask_again: true };
+  // Round 2 still unclear: there is no third question, so alert.
+  return {
+    ...decision,
+    notify: true,
+    level: "emergency",
+    family_summary: decision.family_summary || unclearMessage(personName),
+    reply_to_person: decision.reply_to_person ?? RULES_EMERGENCY_REPLY,
+    ask_again: false,
+  };
 }
 
 // Lower case, curly apostrophes made straight, so "I’M FINE" matches "i'm fine".
@@ -159,11 +216,9 @@ function containsPhrase(text: string, phrase: string): boolean {
   return new RegExp(`(?<![a-z0-9'])${escapeRegExp(phrase)}(?![a-z0-9'])`).test(text);
 }
 
-// Claude and Gemini both failed but we have the person's words (Plan C).
-export function fallbackDecision(args: {
-  transcript: string;
-  impactMaxG: number;
-}): Decision {
+// Claude and Gemini both failed but we have the person's words (Plan C). Same round
+// rules as the AI: an unclear answer asks again in round 1 and alerts in round 2.
+export function fallbackDecision(args: { transcript: string; round: 1 | 2 }): Decision {
   const text = normalize(args.transcript);
   const base = {
     severity: RULE_SEVERITY,
@@ -181,10 +236,10 @@ export function fallbackDecision(args: {
   if (isPlainOk) {
     return { ...base, notify: false, level: "none", reply_to_person: RULES_OK_REPLY };
   }
-  // Unclear answer: the impact decides how loud the alert is.
-  return args.impactMaxG >= STRONG_IMPACT_G
-    ? { ...base, notify: true, level: "emergency", reply_to_person: RULES_EMERGENCY_REPLY }
-    : { ...base, notify: true, level: "precautionary", reply_to_person: RULES_PRECAUTIONARY_REPLY };
+  // Unclear answer.
+  return args.round === 1
+    ? { ...base, notify: false, level: "none", family_summary: "", reply_to_person: null, ask_again: true }
+    : { ...base, notify: true, level: "emergency", reply_to_person: RULES_EMERGENCY_REPLY };
 }
 
 // Checks Claude's or Gemini's JSON. Returns null when it cannot be used. Fixes what is safe to
