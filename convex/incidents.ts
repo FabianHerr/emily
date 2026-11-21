@@ -1,7 +1,7 @@
 import { v } from "convex/values";
-import { internalMutation, internalQuery } from "./_generated/server";
+import { internalMutation, internalQuery, type MutationCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { impactMessage } from "./decide";
 import { logEvent } from "./events";
 
@@ -390,11 +390,6 @@ export const acknowledge = internalMutation({
     const recent = await ctx.db.query("incidents").order("desc").take(ACK_SEARCH_LIMIT);
     const incident = recent.find((i) => i.receipts.includes(args.receipt));
     if (!incident) return { found: false as const };
-    // Already handled, or closed as a false alarm: a late tap must not reopen it.
-    if (incident.status === "acknowledged" || incident.status === "closed") {
-      return { found: true as const, alreadyAcknowledged: true };
-    }
-
     const members = await ctx.db
       .query("familyMembers")
       .withIndex("by_deviceId", (q) => q.eq("deviceId", incident.deviceId))
@@ -403,29 +398,44 @@ export const acknowledge = internalMutation({
       members.find((m) => args.userKey !== undefined && m.pushoverUserKey === args.userKey)
         ?.name ?? UNKNOWN_ACKNOWLEDGER;
 
-    await ctx.db.patch("incidents", incident._id, {
-      status: "acknowledged",
-      acknowledgedBy: name,
-    });
-    await logEvent(ctx, {
-      deviceId: incident.deviceId,
-      incidentId: incident._id,
-      type: "acknowledged",
-      text: `${name} is on the way`,
-      level: "info",
-    });
-    // For the watch to say (Talk to Loved One adds the audio; GET /poll delivers it).
-    await ctx.scheduler.runAfter(0, internal.talk.say, {
-      deviceId: incident.deviceId,
-      incidentId: incident._id,
-      text: `${name} is on the way`,
-      askAgain: false,
-    });
-    // Stop the alerts still repeating on the other family members' phones.
-    await ctx.scheduler.runAfter(0, internal.notify.cancelReceipts, {
-      incidentId: incident._id,
-      receipts: incident.receipts,
-    });
-    return { found: true as const, alreadyAcknowledged: false };
+    const { alreadyHandled } = await acknowledgeIncident(ctx, incident, name);
+    return { found: true as const, alreadyAcknowledged: alreadyHandled };
   },
 });
+
+// Shared by POST /ack (acknowledge above) and the portal's "On my way" (portal.onMyWay).
+// An incident already acknowledged, or closed as a false alarm, is left alone: a late
+// tap must not reopen it. Otherwise: mark it acknowledged, log it, tell the watch, and
+// stop the alerts still repeating on the other family members' phones.
+export async function acknowledgeIncident(
+  ctx: MutationCtx,
+  incident: Doc<"incidents">,
+  name: string,
+): Promise<{ alreadyHandled: boolean }> {
+  if (incident.status === "acknowledged" || incident.status === "closed") {
+    return { alreadyHandled: true };
+  }
+  await ctx.db.patch("incidents", incident._id, {
+    status: "acknowledged",
+    acknowledgedBy: name,
+  });
+  await logEvent(ctx, {
+    deviceId: incident.deviceId,
+    incidentId: incident._id,
+    type: "acknowledged",
+    text: `${name} is on the way`,
+    level: "info",
+  });
+  // For the watch to say (Talk to Loved One adds the audio; GET /poll delivers it).
+  await ctx.scheduler.runAfter(0, internal.talk.say, {
+    deviceId: incident.deviceId,
+    incidentId: incident._id,
+    text: `${name} is on the way`,
+    askAgain: false,
+  });
+  await ctx.scheduler.runAfter(0, internal.notify.cancelReceipts, {
+    incidentId: incident._id,
+    receipts: incident.receipts,
+  });
+  return { alreadyHandled: false };
+}

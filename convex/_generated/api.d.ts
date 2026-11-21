@@ -16,6 +16,7 @@ import type * as fallback from "../fallback.js";
 import type * as http from "../http.js";
 import type * as incidents from "../incidents.js";
 import type * as notify from "../notify.js";
+import type * as portal from "../portal.js";
 import type * as seed from "../seed.js";
 import type * as talk from "../talk.js";
 
@@ -34,6 +35,7 @@ declare const fullApi: ApiFromModules<{
   http: typeof http;
   incidents: typeof incidents;
   notify: typeof notify;
+  portal: typeof portal;
   seed: typeof seed;
   talk: typeof talk;
 }>;
