@@ -346,6 +346,10 @@ Cosas que ya sabemos y que es fácil pasar por alto. Cada una dice en qué tarea
 | Suena el teléfono de Fabian (iPhone, Critical Alerts) | menos de 2 s desde el envío | 21 nov, medido a ojo | menos de 10 s |
 | Voz a texto (ElevenLabs `scribe_v2`, clip de 3.2 s, 16 kHz) | mediana 0.24 s (0.23–0.40 s, 5 veces; la primera es la más lenta). Transcribió perfecto | 21 nov, dentro de Convex, voz "Grandma" de macOS | límite 4 s |
 | Decisión de Claude (`claude-sonnet-5-5`, effort low) | mediana 2.17 s (1.57–3.08 s, 12 veces) | 21 nov | 2.5 s, límite 5 s |
+| Voz de Emily (ElevenLabs `eleven_flash_v2_5`, frase de 3.8 s) | 0.45–0.49 s en caliente; **3.2 s la primera vez (en frío)** | 21 nov, dentro de Convex | límite 3 s |
+| Cadena del servidor: voz a texto → Claude → voz de Emily | **2.3–2.5 s en caliente, 6.9 s en frío** (3 veces, sin alertas) | 21 nov | — |
+
+Ojo: la primera llamada en frío casi pasa el límite de 3 s de la voz. Antes del demo, hacer una caída de prueba para "calentar". Falta medir lo que pasa en el reloj: subir el WAV, esperar el `/poll` (CJ-14) y reproducir. La voz todavía no está conectada a `processFall`: eso es CJ-14.
 
 Falta medir: desde la caída real del reloj (CJ-9), y los pasos de voz e IA (CJ-18).
 
