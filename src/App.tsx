@@ -418,7 +418,7 @@ function History({
     today.length === 0
       ? 'None today.'
       : // The list is capped, so a full list of today's falls may be missing older ones.
-        `${today.length}${today.length === incidents.length && incidents.length >= 20 ? ' or more' : ''} today.${waiting === 0 ? 'Every one was answered.' : waiting === 1 ? 'One still needs someone.' : `${waiting} still need someone.`}`
+        `${today.length}${today.length === incidents.length && incidents.length >= 20 ? ' or more' : ''} today. ${waiting === 0 ? 'Every one was answered.' : waiting === 1 ? 'One still needs someone.' : `${waiting} still need someone.`}`
 
   return (
     <section className="history">
