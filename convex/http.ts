@@ -103,6 +103,57 @@ const fall = httpAction(async (ctx, req) => {
   return json(200, { incidentId: result.incidentId });
 });
 
+// Pushover's callback body is tiny; ignore anything bigger.
+const MAX_ACK_BODY_CHARS = 16 * 1024;
+const MAX_RECEIPT_CHARS = 100;
+
+// Reads one string field from a form-encoded body, a JSON body, or the query string.
+function readAckField(
+  form: URLSearchParams,
+  jsonBody: unknown,
+  query: URLSearchParams,
+  name: string,
+): string | undefined {
+  const fromJson =
+    typeof jsonBody === "object" && jsonBody !== null
+      ? (jsonBody as Record<string, unknown>)[name]
+      : undefined;
+  const raw =
+    form.get(name) ?? (typeof fromJson === "string" ? fromJson : null) ?? query.get(name);
+  const value = raw?.trim();
+  return value ? value : undefined;
+}
+
+// POST /ack: Pushover calls this when a family member acknowledges an emergency.
+// Fields: receipt, acknowledged, acknowledged_at, acknowledged_by (user key),
+// acknowledged_by_device. Always answers 200: anything else makes Pushover retry.
+const ack = httpAction(async (ctx, req) => {
+  try {
+    const text = await req.text().catch(() => "");
+    const body = text.length <= MAX_ACK_BODY_CHARS ? text : "";
+    let jsonBody: unknown = null;
+    try {
+      jsonBody = JSON.parse(body);
+    } catch {
+      // Not JSON: form-encoded or empty.
+    }
+    const form = new URLSearchParams(body);
+    const query = new URL(req.url).searchParams;
+
+    const receipt = readAckField(form, jsonBody, query, "receipt");
+    if (!receipt || receipt.length > MAX_RECEIPT_CHARS) {
+      return json(200, { ok: true, found: false });
+    }
+    const userKey = readAckField(form, jsonBody, query, "acknowledged_by");
+    const result = await ctx.runMutation(internal.incidents.acknowledge, { receipt, userKey });
+    return json(200, { ok: true, found: result.found });
+  } catch (error) {
+    console.error(`/ack failed: ${String(error)}`);
+    return json(200, { ok: false });
+  }
+});
+
 const http = httpRouter();
 http.route({ path: "/fall", method: "POST", handler: fall });
+http.route({ path: "/ack", method: "POST", handler: ack });
 export default http;

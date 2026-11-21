@@ -215,6 +215,14 @@ POST https://api.pushover.net/1/messages.json
 
 Cada familiar instala la app Pushover y activa "Critical Alerts". Prueba gratis 30 días.
 
+**Implementado en CJ-7:**
+- `convex/notify.ts`: `sendAlert({ incidentId, level, message })` manda un aviso por familiar, en paralelo, 5 s máximo cada uno; `cancelReceipts({ receipts })` corta las repeticiones. Título: "Rosa fell at 2:14 PM" (hora de Toronto).
+- `convex/incidents.ts`: `getAlertTargets`, `saveReceipts` (guarda los `receipt` y el `status`) y `acknowledge` (marca `acknowledged`, guarda `acknowledgedBy`, deja "<nombre> is on the way" en `messages` y cancela los avisos de los demás).
+- `POST /ack`: lee `receipt` y `acknowledged_by` del cuerpo (form o JSON) o de la URL. **Siempre responde 200** con `{ "ok": true, "found": ... }`, aunque llegue basura.
+- Hasta CJ-13, cada caída nueva de ronda 1 manda directo una emergencia: "Possible fall. Impact of 3.4 g". La ronda 2 no vuelve a avisar (CJ-16).
+- Regla sin bajar de nivel: si el incidente ya es `emergency`, no se manda un preventivo; si es `acknowledged` o `closed`, no se manda nada.
+- **Falta la primera prueba real** (envío, "Ya voy" y cancelación nunca se han probado contra Pushover). Ojo: cualquier `POST /fall` de ronda 1 ya hace sonar los teléfonos.
+
 ## 10. El reloj
 
 **Configuración (igual en Mac y Windows):**

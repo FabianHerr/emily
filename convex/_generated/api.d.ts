@@ -11,6 +11,7 @@
 import type * as elevenlabs from "../elevenlabs.js";
 import type * as http from "../http.js";
 import type * as incidents from "../incidents.js";
+import type * as notify from "../notify.js";
 import type * as seed from "../seed.js";
 
 import type {
@@ -23,6 +24,7 @@ declare const fullApi: ApiFromModules<{
   elevenlabs: typeof elevenlabs;
   http: typeof http;
   incidents: typeof incidents;
+  notify: typeof notify;
   seed: typeof seed;
 }>;
 
