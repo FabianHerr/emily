@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { internalMutation, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { impactMessage } from "./decide";
 
 // Defaults for POST /fall when the watch leaves a value out.
 const DEFAULT_SECONDS_STILL = 0;
@@ -16,6 +17,9 @@ const UNKNOWN_ACKNOWLEDGER = "Someone";
 // A /fall that arrives this soon after an open incident on the same watch is a
 // retry (the watch lost our reply), not a new fall: reuse the incident, no new alert.
 const DEDUPE_WINDOW_MS = 60_000;
+// Last defence (HANDOFF.md section 8): a new incident with no decision after this
+// long gets a precautionary alert. processFall normally decides in under 10 s.
+const LAST_DEFENCE_MS = 30_000;
 
 // Called by POST /fall (convex/http.ts). Bad input never throws: it returns
 // { ok: false } so the route can answer 404 instead of 500.
@@ -128,9 +132,35 @@ export const recordFall = internalMutation({
         incidentId,
         round: args.round,
       });
+      // Convex does not retry scheduled actions: if processFall dies outside its
+      // try/catch, this is what still alerts the family. It checks itself and does
+      // nothing once the incident has a decision or has moved on.
+      await ctx.scheduler.runAfter(LAST_DEFENCE_MS, internal.incidents.lastDefence, {
+        incidentId,
+      });
     }
 
     return { ok: true as const, incidentId };
+  },
+});
+
+// Scheduled by recordFall for every new incident. Alerts only if the incident is
+// still "asking" AND no decision was ever saved. A silent round 1 with a weak impact
+// saves a decision (level none, ask_again) and stays "asking": that is not a failure.
+export const lastDefence = internalMutation({
+  args: { incidentId: v.id("incidents") },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const incident = await ctx.db.get("incidents", args.incidentId);
+    if (!incident) return null;
+    if (incident.status !== "asking" || incident.decision !== undefined) return null;
+    console.error(`lastDefence: no decision for ${incident._id} after ${LAST_DEFENCE_MS} ms, alerting`);
+    await ctx.scheduler.runAfter(0, internal.notify.sendAlert, {
+      incidentId: incident._id,
+      level: "precautionary",
+      message: impactMessage(incident.impact_max_g),
+    });
+    return null;
   },
 });
 
@@ -220,7 +250,12 @@ export const decisionValidator = v.object({
 });
 // What is stored in incidents.decision: the decision plus how it was made.
 const storedDecisionValidator = decisionValidator.extend({
-  source: v.union(v.literal("silence"), v.literal("claude"), v.literal("fallback")),
+  source: v.union(
+    v.literal("silence"),
+    v.literal("claude"),
+    v.literal("gemini"),
+    v.literal("rules"),
+  ),
   sttMs: v.number(),
   aiMs: v.union(v.number(), v.null()),
 });

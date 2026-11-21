@@ -11,6 +11,7 @@
 import type * as ai from "../ai.js";
 import type * as decide from "../decide.js";
 import type * as elevenlabs from "../elevenlabs.js";
+import type * as fallback from "../fallback.js";
 import type * as http from "../http.js";
 import type * as incidents from "../incidents.js";
 import type * as notify from "../notify.js";
@@ -27,6 +28,7 @@ declare const fullApi: ApiFromModules<{
   ai: typeof ai;
   decide: typeof decide;
   elevenlabs: typeof elevenlabs;
+  fallback: typeof fallback;
   http: typeof http;
   incidents: typeof incidents;
   notify: typeof notify;

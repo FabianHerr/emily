@@ -6,11 +6,36 @@ export const STRONG_IMPACT_G = 3.0;
 // Limits on what Claude writes (HANDOFF.md section 6).
 export const MAX_FAMILY_SUMMARY_CHARS = 200;
 export const MAX_REPLY_WORDS = 15;
-// Rules (silence, fallback) have no model behind them, so they report no confidence.
+// Rules (silence, keywords) have no model behind them, so they report no confidence.
 const RULE_SEVERITY = "unknown";
 const RULE_CONFIDENCE = 0;
-// What Emily says when Claude failed but the person did speak.
-const FALLBACK_REPLY = "I am getting help for you.";
+// Keyword rules (Plan C), used when Claude and Gemini both fail. Matched as whole
+// words, case-insensitive. Emergency words are checked first, so "I'm fine but I
+// can't get up" is an emergency. Inflected forms are listed because word-boundary
+// matching would otherwise miss "my hip hurts".
+const EMERGENCY_WORDS = [
+  "help",
+  "hurt",
+  "hurts",
+  "hurting",
+  "pain",
+  "painful",
+  "can't",
+  "cannot",
+  "fell",
+  "ambulance",
+];
+const OK_PHRASES = ["i'm ok", "i'm okay", "i'm fine", "i am fine", "all good"];
+// What Emily says back after a rules decision (no family names: rules do not know them).
+const RULES_EMERGENCY_REPLY = "I am getting help for you.";
+const RULES_PRECAUTIONARY_REPLY = "I am letting your family know, just in case.";
+const RULES_OK_REPLY = "Good to hear. I'm here if you need me.";
+
+// Family alert when there is no transcript to quote (no clip, a crash, the last defence).
+export const impactMessage = (impactMaxG: number | null) =>
+  impactMaxG === null
+    ? "Possible fall."
+    : `Possible fall. Impact of ${impactMaxG.toFixed(1)} g`;
 
 export const LEVELS = ["none", "precautionary", "emergency"] as const;
 export type Level = (typeof LEVELS)[number];
@@ -104,24 +129,46 @@ export function decideOnSilence(args: {
   return { ...base, notify: false, level: "none", family_summary: "", ask_again: true };
 }
 
-// Claude failed but we have the person's words: alert and quote them.
-// impactMaxG is unused for now; the keyword rules of CJ-19 will use it.
+// Lower case, curly apostrophes made straight, so "I’M FINE" matches "i'm fine".
+function normalize(text: string): string {
+  return text.toLowerCase().replace(/[‘’ʼ`]/g, "'");
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Whole words only: "help" does not match "helpful", "pain" does not match "painting".
+// An apostrophe counts as part of a word, so "can't" is one word.
+function containsPhrase(text: string, phrase: string): boolean {
+  return new RegExp(`(?<![a-z0-9'])${escapeRegExp(phrase)}(?![a-z0-9'])`).test(text);
+}
+
+// Claude and Gemini both failed but we have the person's words (Plan C).
 export function fallbackDecision(args: {
   transcript: string;
   impactMaxG: number;
 }): Decision {
-  return {
-    notify: true,
-    level: "emergency",
+  const text = normalize(args.transcript);
+  const base = {
     severity: RULE_SEVERITY,
     confidence: RULE_CONFIDENCE,
     family_summary: truncateChars(`Said: "${args.transcript}"`, MAX_FAMILY_SUMMARY_CHARS),
-    reply_to_person: FALLBACK_REPLY,
     ask_again: false,
   };
+  if (EMERGENCY_WORDS.some((w) => containsPhrase(text, w))) {
+    return { ...base, notify: true, level: "emergency", reply_to_person: RULES_EMERGENCY_REPLY };
+  }
+  if (OK_PHRASES.some((p) => containsPhrase(text, p))) {
+    return { ...base, notify: false, level: "none", reply_to_person: RULES_OK_REPLY };
+  }
+  // Unclear answer: the impact decides how loud the alert is.
+  return args.impactMaxG >= STRONG_IMPACT_G
+    ? { ...base, notify: true, level: "emergency", reply_to_person: RULES_EMERGENCY_REPLY }
+    : { ...base, notify: true, level: "precautionary", reply_to_person: RULES_PRECAUTIONARY_REPLY };
 }
 
-// Checks Claude's JSON. Returns null when it cannot be used. Fixes what is safe to
+// Checks Claude's or Gemini's JSON. Returns null when it cannot be used. Fixes what is safe to
 // fix: notify follows level, texts are cut to their limits, confidence is clamped,
 // and an empty reply becomes null.
 export function validateDecision(raw: unknown): Decision | null {
