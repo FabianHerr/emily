@@ -100,6 +100,8 @@ const fall = httpAction(async (ctx, req) => {
     if (audioId) await ctx.storage.delete(audioId);
     return json(404, { error: result.error });
   }
+  // A retried upload of a clip we already have: drop the duplicate file.
+  if (result.audioUnused && audioId) await ctx.storage.delete(audioId);
   return json(200, { incidentId: result.incidentId });
 });
 
@@ -126,7 +128,10 @@ function readAckField(
 
 // POST /ack: Pushover calls this when a family member acknowledges an emergency.
 // Fields: receipt, acknowledged, acknowledged_at, acknowledged_by (user key),
-// acknowledged_by_device. Always answers 200: anything else makes Pushover retry.
+// acknowledged_by_device.
+// Answers 200 when the acknowledgment was handled or the request is garbage.
+// Answers 503 when the receipt is not known yet or something failed here:
+// Pushover then retries the callback a minute later, so the "On my way" is not lost.
 const ack = httpAction(async (ctx, req) => {
   try {
     const text = await req.text().catch(() => "");
@@ -146,10 +151,11 @@ const ack = httpAction(async (ctx, req) => {
     }
     const userKey = readAckField(form, jsonBody, query, "acknowledged_by");
     const result = await ctx.runMutation(internal.incidents.acknowledge, { receipt, userKey });
-    return json(200, { ok: true, found: result.found });
+    if (!result.found) return json(503, { ok: false, found: false });
+    return json(200, { ok: true, found: true });
   } catch (error) {
     console.error(`/ack failed: ${String(error)}`);
-    return json(200, { ok: false });
+    return json(503, { ok: false });
   }
 });
 

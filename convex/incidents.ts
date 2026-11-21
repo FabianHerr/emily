@@ -13,6 +13,9 @@ const MAX_FAMILY_MEMBERS = 50;
 const ACK_SEARCH_LIMIT = 100;
 // Shown when the Pushover user key does not match anyone in the family.
 const UNKNOWN_ACKNOWLEDGER = "Someone";
+// A /fall that arrives this soon after an open incident on the same watch is a
+// retry (the watch lost our reply), not a new fall: reuse the incident, no new alert.
+const DEDUPE_WINDOW_MS = 60_000;
 
 // Called by POST /fall (convex/http.ts). Bad input never throws: it returns
 // { ok: false } so the route can answer 404 instead of 500.
@@ -29,7 +32,12 @@ export const recordFall = internalMutation({
     audioId: v.optional(v.id("_storage")),
   },
   returns: v.union(
-    v.object({ ok: v.literal(true), incidentId: v.id("incidents") }),
+    v.object({
+      ok: v.literal(true),
+      incidentId: v.id("incidents"),
+      // True when the uploaded audio was a duplicate and was not attached.
+      audioUnused: v.optional(v.boolean()),
+    }),
     v.object({ ok: v.literal(false), error: v.string() }),
   ),
   handler: async (ctx, args) => {
@@ -64,6 +72,30 @@ export const recordFall = internalMutation({
       incidentId = id;
     } else {
       // Round 1, or round 2 without incidentId (the watch lost the round-1 reply).
+      const latest = await ctx.db
+        .query("incidents")
+        .withIndex("by_deviceId_and_createdAt", (q) => q.eq("deviceId", args.deviceId))
+        .order("desc")
+        .first();
+      const isOpen =
+        latest !== null &&
+        (latest.status === "asking" ||
+          latest.status === "precautionary" ||
+          latest.status === "emergency");
+      if (latest !== null && isOpen && Date.now() - latest.createdAt < DEDUPE_WINDOW_MS) {
+        // Retry of a fall we already have: same incident, family already alerted.
+        await ctx.db.patch("incidents", latest._id, {
+          ...(args.round === 2 && { round: 2 }),
+          // One clip per round: a retried upload is not attached twice.
+          ...(args.audioId !== undefined &&
+            latest.audioIds.length < args.round && {
+              audioIds: [...latest.audioIds, args.audioId],
+            }),
+        });
+        const audioUnused =
+          args.audioId !== undefined && latest.audioIds.length >= args.round;
+        return { ok: true as const, incidentId: latest._id, audioUnused };
+      }
       incidentId = await ctx.db.insert("incidents", {
         deviceId: args.deviceId,
         status: "asking",
@@ -76,16 +108,14 @@ export const recordFall = internalMutation({
         receipts: [],
         createdAt: Date.now(),
       });
-      // Alert the family right away, in the same transaction as the write.
-      // CJ-13 replaces this direct call with the AI step. Round 2 does not alert
-      // again until CJ-16.
-      if (args.round === 1) {
-        await ctx.scheduler.runAfter(0, internal.notify.sendAlert, {
-          incidentId,
-          level: "emergency",
-          message: `Possible fall. Impact of ${args.impactMaxG.toFixed(1)} g`,
-        });
-      }
+      // Alert the family right away, in the same transaction as the write. Every
+      // NEW incident alerts, whatever the round: a round 2 without incidentId means
+      // round 1 never reached us. CJ-13 replaces this direct call with the AI step.
+      await ctx.scheduler.runAfter(0, internal.notify.sendAlert, {
+        incidentId,
+        level: "emergency",
+        message: `Possible fall. Impact of ${args.impactMaxG.toFixed(1)} g`,
+      });
     }
 
     return { ok: true as const, incidentId };
@@ -158,6 +188,7 @@ export const saveReceipts = internalMutation({
     // Someone acknowledged while these were being sent: stop them from repeating.
     if (finished && args.receipts.length > 0) {
       await ctx.scheduler.runAfter(0, internal.notify.cancelReceipts, {
+        incidentId: incident._id,
         receipts: args.receipts,
       });
     }
@@ -177,7 +208,8 @@ export const acknowledge = internalMutation({
     const recent = await ctx.db.query("incidents").order("desc").take(ACK_SEARCH_LIMIT);
     const incident = recent.find((i) => i.receipts.includes(args.receipt));
     if (!incident) return { found: false as const };
-    if (incident.status === "acknowledged") {
+    // Already handled, or closed as a false alarm: a late tap must not reopen it.
+    if (incident.status === "acknowledged" || incident.status === "closed") {
       return { found: true as const, alreadyAcknowledged: true };
     }
 
@@ -202,11 +234,10 @@ export const acknowledge = internalMutation({
       delivered: false,
     });
     // Stop the alerts still repeating on the other family members' phones.
-    if (incident.receipts.length > 0) {
-      await ctx.scheduler.runAfter(0, internal.notify.cancelReceipts, {
-        receipts: incident.receipts,
-      });
-    }
+    await ctx.scheduler.runAfter(0, internal.notify.cancelReceipts, {
+      incidentId: incident._id,
+      receipts: incident.receipts,
+    });
     return { found: true as const, alreadyAcknowledged: false };
   },
 });
