@@ -10,6 +10,9 @@ const DEVICE_ID = 'watch-1'
 const NO_SIGNAL_AFTER_MS = 3 * 60 * 1000
 // A fall this recent leads the page; older ones only appear in the history.
 const FRESH_FALL_MS = 30 * 60 * 1000
+// "Fabian is on the way" leads the page only this long after the fall; then it is history.
+const ON_THE_WAY_MS = 10 * 60 * 1000
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000
 // How often the "last seen" texts are refreshed.
 const CLOCK_TICK_MS = 15 * 1000
 const WHO_STORAGE_KEY = 'emily.who'
@@ -269,9 +272,18 @@ function NowPanel({
   const never = lastHeartbeat === null
   const online = !never && now - lastHeartbeat < NO_SIGNAL_AFTER_MS
 
+  // Calm is the default: nothing is waiting for anyone.
   let mood: Mood = 'calm'
-  let headline = `${personName} is protected`
-  let detail: string | null = null
+  let headline = `${personName} is doing fine`
+  const unanswered = overview.incidents.filter(isOpen).length
+  const lastDay = latest ? dayLabel(latest.createdAt, now) : ''
+  const lastWhen =
+    lastDay === 'Today' ? 'today' : lastDay === 'Yesterday' ? 'yesterday' : `on ${lastDay}`
+  let detail: string | null = !latest
+    ? 'No falls detected.'
+    : unanswered > 0
+      ? `Nothing new. ${unanswered === 1 ? 'One older fall was' : `${unanswered} older falls were`} never answered.`
+      : `No falls need attention. The last one was ${lastWhen} at ${timeFormat.format(latest.createdAt)}.`
   let quote: string | null = null
   let action: Incident | null = null
 
@@ -288,7 +300,7 @@ function NowPanel({
     mood = 'alert'
     headline = `Possible fall at ${timeFormat.format(fresh.createdAt)}`
     detail = `Emily is asking ${personName} if everything is OK.`
-  } else if (fresh && fresh.status === 'acknowledged') {
+  } else if (fresh && fresh.status === 'acknowledged' && now - fresh.createdAt < ON_THE_WAY_MS) {
     headline = `${fresh.acknowledgedBy ?? 'Someone'} is on the way`
     detail = `${personName} fell at ${timeFormat.format(fresh.createdAt)}. Emily told ${personName} that help is coming.`
   } else if (never) {
@@ -381,6 +393,10 @@ function FallRow({
   )
 }
 
+type Tab = 'new' | 'today' | 'week'
+const TAB_ORDER: Tab[] = ['new', 'today', 'week']
+
+// Falls in three views: the ones still waiting for someone, today's, and the last 7 days.
 function History({
   overview,
   now,
@@ -393,54 +409,96 @@ function History({
   onGo: (incidentId: Id<'incidents'>, name: string) => Promise<void>
 }) {
   const { incidents, personName, familyNames } = overview
-  if (incidents.length === 0) {
-    return (
-      <section className="history">
-        <h2>Falls</h2>
-        <p className="quiet">None so far. If {personName} falls, it shows up here right away.</p>
-      </section>
-    )
+  const waiting = incidents.filter(isOpen)
+  const today = incidents.filter((i) => dayLabel(i.createdAt, now) === 'Today')
+  const week = incidents.filter((i) => now - i.createdAt < WEEK_MS)
+  const lists: Record<Tab, Incident[]> = { new: waiting, today, week }
+
+  // Until the person picks a tab: open on what needs them, otherwise on today.
+  const [picked, setPicked] = useState<Tab | null>(null)
+  const tab: Tab = picked ?? (waiting.length > 0 ? 'new' : 'today')
+
+  const tabs: { id: Tab; label: string }[] = [
+    { id: 'new', label: 'New' },
+    { id: 'today', label: 'Today' },
+    { id: 'week', label: 'This week' },
+  ]
+  const empty: Record<Tab, string> = {
+    new: 'Nothing is waiting for you. Falls that nobody has answered show up here.',
+    today: `No falls today. If ${personName} falls, it shows up here right away.`,
+    week: 'No falls in the last 7 days.',
+  }
+
+  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return
+    const step = event.key === 'ArrowRight' ? 1 : -1
+    const next = TAB_ORDER[(TAB_ORDER.indexOf(tab) + step + TAB_ORDER.length) % TAB_ORDER.length]
+    setPicked(next)
+    document.getElementById(`tab-${next}`)?.focus()
   }
 
   // The fresh open fall already has the big button at the top of the page.
-  const leading = now - incidents[0].createdAt < FRESH_FALL_MS && isOpen(incidents[0]) ? incidents[0]._id : null
+  const leading =
+    incidents.length > 0 && now - incidents[0].createdAt < FRESH_FALL_MS && isOpen(incidents[0])
+      ? incidents[0]._id
+      : null
+
+  const shown = lists[tab]
   const days: { label: string; items: Incident[] }[] = []
-  for (const incident of incidents) {
+  for (const incident of shown) {
     const label = dayLabel(incident.createdAt, now)
     const last = days[days.length - 1]
     if (last && last.label === label) last.items.push(incident)
     else days.push({ label, items: [incident] })
   }
-
-  const today = incidents.filter((i) => dayLabel(i.createdAt, now) === 'Today')
-  const waiting = today.filter(isOpen).length
-  const summary =
-    today.length === 0
-      ? 'None today.'
-      : // The list is capped, so a full list of today's falls may be missing older ones.
-        `${today.length}${today.length === incidents.length && incidents.length >= 20 ? ' or more' : ''} today. ${waiting === 0 ? 'Every one was answered.' : waiting === 1 ? 'One still needs someone.' : `${waiting} still need someone.`}`
+  // One day needs no day heading on the Today tab.
+  const showDayHeadings = tab !== 'today'
 
   return (
     <section className="history">
       <h2>Falls</h2>
-      <p className="history-summary">{summary}</p>
-      {days.map((day) => (
-        <div key={day.label} className="day">
-          <h3>{day.label}</h3>
-          <ul>
-            {day.items.map((incident) => (
-              <FallRow
-                key={incident._id}
-                incident={incident}
-                names={familyNames}
-                who={who}
-                onGo={onGo}
-                showAction={isOpen(incident) && incident._id !== leading}
-              />
-            ))}
-          </ul>
-        </div>
-      ))}
+      <div className="tabs" role="tablist" aria-label="Which falls to show" onKeyDown={onKeyDown}>
+        {tabs.map(({ id, label }) => (
+          <button
+            key={id}
+            id={`tab-${id}`}
+            type="button"
+            role="tab"
+            aria-selected={tab === id}
+            aria-controls="falls-panel"
+            tabIndex={tab === id ? 0 : -1}
+            className={id === 'new' && waiting.length > 0 ? 'tab tab-urgent' : 'tab'}
+            onClick={() => setPicked(id)}
+          >
+            {label}
+            <span className="tab-count">{lists[id].length}</span>
+          </button>
+        ))}
+      </div>
+
+      <div id="falls-panel" role="tabpanel" aria-labelledby={`tab-${tab}`}>
+        {shown.length === 0 ? (
+          <p className="quiet">{empty[tab]}</p>
+        ) : (
+          days.map((day) => (
+            <div key={day.label} className="day">
+              {showDayHeadings && <h3>{day.label}</h3>}
+              <ul>
+                {day.items.map((incident) => (
+                  <FallRow
+                    key={incident._id}
+                    incident={incident}
+                    names={familyNames}
+                    who={who}
+                    onGo={onGo}
+                    showAction={isOpen(incident) && incident._id !== leading}
+                  />
+                ))}
+              </ul>
+            </div>
+          ))
+        )}
+      </div>
     </section>
   )
 }

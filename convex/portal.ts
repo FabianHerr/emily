@@ -5,8 +5,8 @@ import { mutation, query } from "./_generated/server";
 import { acknowledgeIncident } from "./incidents";
 import schema from "./schema";
 
-// The portal shows this many incidents, newest first.
-const MAX_INCIDENTS = 20;
+// The portal shows this many incidents, newest first: enough for a busy week.
+const MAX_INCIDENTS = 100;
 // Upper bound when reading a device's family members.
 const MAX_FAMILY_MEMBERS = 50;
 

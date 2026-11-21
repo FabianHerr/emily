@@ -258,8 +258,63 @@
   font-weight: 700;
 }
 
-.history-summary {
+/* Tabs: a row of plain labels with a thick underline on the chosen one. */
+.tabs {
+  display: flex;
+  gap: 4px 22px;
+  margin-top: 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 46px;
+  padding: 0 2px;
+  margin-bottom: -1px;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  background: none;
+  font-weight: 600;
   color: var(--ink-soft);
+  cursor: pointer;
+  transition: color 160ms ease-out, border-color 160ms ease-out;
+}
+
+.tab:hover {
+  color: var(--ink);
+}
+
+.tab[aria-selected='true'] {
+  color: var(--ink);
+  border-bottom-color: var(--green-deep);
+}
+
+.tab-count {
+  min-width: 1.6em;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--green-soft);
+  color: var(--green-deep);
+  font-size: 0.82rem;
+  font-weight: 650;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Falls are waiting: the New tab says so in pink. */
+.tab-urgent .tab-count {
+  background: var(--pink-deep);
+  color: #fff;
+}
+
+.tab-urgent[aria-selected='true'] {
+  border-bottom-color: var(--pink-deep);
+}
+
+#falls-panel > .quiet {
+  padding-top: 18px;
 }
 
 .day h3 {
