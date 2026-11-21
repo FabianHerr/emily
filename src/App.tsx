@@ -8,19 +8,25 @@ import './App.css'
 const DEVICE_ID = 'watch-1'
 // The watch polls at least once a minute; three missed minutes means no signal.
 const NO_SIGNAL_AFTER_MS = 3 * 60 * 1000
+// A fall this recent leads the page; older ones only appear in the history.
+const FRESH_FALL_MS = 30 * 60 * 1000
 // How often the "last seen" texts are refreshed.
 const CLOCK_TICK_MS = 15 * 1000
 const WHO_STORAGE_KEY = 'emily.who'
 
 type Overview = NonNullable<ReturnType<typeof useQuery<typeof api.portal.overview>>>
 type Incident = Overview['incidents'][number]
+// Green: all is well. Pink: look here. Plain: nothing to say yet.
+type Mood = 'calm' | 'alert' | 'plain'
 
 const timeFormat = new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' })
-const dayFormat = new Intl.DateTimeFormat('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+const dayFormat = new Intl.DateTimeFormat('en-US', { weekday: 'long', month: 'short', day: 'numeric' })
 
-function formatWhen(ms: number, now: number): string {
-  const sameDay = new Date(ms).toDateString() === new Date(now).toDateString()
-  return sameDay ? `Today, ${timeFormat.format(ms)}` : `${dayFormat.format(ms)}, ${timeFormat.format(ms)}`
+function dayLabel(ms: number, now: number): string {
+  const day = new Date(ms).toDateString()
+  if (day === new Date(now).toDateString()) return 'Today'
+  if (day === new Date(now - 24 * 60 * 60 * 1000).toDateString()) return 'Yesterday'
+  return dayFormat.format(ms)
 }
 
 function formatAgo(ms: number, now: number): string {
@@ -57,203 +63,330 @@ function useNow(): number {
   return now
 }
 
-// Emily's cloud, in her two pastels (green and pink).
-function EmilyCloud() {
+const isOpen = (incident: Incident) =>
+  incident.status === 'emergency' || incident.status === 'precautionary'
+
+// Emily's cloud in her two pastels. Eyes are open and blink now and then (App.css);
+// when something needs attention her brows lift and the smile goes.
+function EmilyCloud({ mood }: { mood: Mood }) {
   return (
-    <svg viewBox="0 0 200 160" role="img" aria-label="Emily">
+    <svg className={`emily emily-${mood}`} viewBox="0 0 200 160" role="img" aria-label="Emily">
       <defs>
-        <linearGradient id="cloud-base" x1="0" y1="0.1" x2="1" y2="0.9">
-          <stop offset="0" stopColor="#c9ecd6" />
-          <stop offset="0.5" stopColor="#e6ead9" />
-          <stop offset="1" stopColor="#f9c9d6" />
+        <linearGradient id="emily-base" x1="0" y1="0.1" x2="1" y2="0.9">
+          <stop offset="0" stopColor="#a6dfbd" />
+          <stop offset="0.52" stopColor="#e3ecd6" />
+          <stop offset="1" stopColor="#f3a9c0" />
         </linearGradient>
-        <radialGradient id="cloud-pink" cx="0.2" cy="0.85" r="0.45">
-          <stop offset="0" stopColor="#fbd3dd" />
-          <stop offset="1" stopColor="#fbd3dd" stopOpacity="0" />
+        <radialGradient id="emily-pink" cx="0.2" cy="0.86" r="0.46">
+          <stop offset="0" stopColor="#f7b9cb" />
+          <stop offset="1" stopColor="#f7b9cb" stopOpacity="0" />
         </radialGradient>
-        <radialGradient id="cloud-green" cx="0.72" cy="0.2" r="0.4">
-          <stop offset="0" stopColor="#d6f1df" />
-          <stop offset="1" stopColor="#d6f1df" stopOpacity="0" />
+        <radialGradient id="emily-green" cx="0.72" cy="0.18" r="0.42">
+          <stop offset="0" stopColor="#bfe9cf" />
+          <stop offset="1" stopColor="#bfe9cf" stopOpacity="0" />
         </radialGradient>
+        <path
+          id="emily-shape"
+          d="M50 152C22 152 6 126 17 100c6-14 13-22 13-38 0-22 18-35 37-32C76 11 102 3 124 16c9 5 14 12 27 12 22 0 36 18 32 38-2 12 6 22 10 37 7 27-11 49-37 49Z"
+        />
       </defs>
-      <g>
-        <path id="cloud-shape" d="M50 152C22 152 6 126 17 100c6-14 13-22 13-38 0-22 18-35 37-32C76 11 102 3 124 16c9 5 14 12 27 12 22 0 36 18 32 38-2 12 6 22 10 37 7 27-11 49-37 49Z" fill="url(#cloud-base)" />
-        <use href="#cloud-shape" fill="url(#cloud-pink)" />
-        <use href="#cloud-shape" fill="url(#cloud-green)" />
+      <use href="#emily-shape" fill="url(#emily-base)" />
+      <use href="#emily-shape" fill="url(#emily-pink)" />
+      <use href="#emily-shape" fill="url(#emily-green)" />
+      <g className="emily-brows" fill="none" stroke="#51645a" strokeOpacity="0.3" strokeWidth="5.5" strokeLinecap="round">
+        <path className="emily-brow-left" d="M64 68q9-6 18-3" />
+        <path className="emily-brow-right" d="M120 65q9-3 18 3" />
       </g>
-      <g fill="none" stroke="#5d6f66" strokeWidth="7.5" strokeLinecap="round">
-        <path d="M63 97a14 14 0 0 1 28 0" />
-        <path d="M111 97a14 14 0 0 1 28 0" />
+      <g className="emily-eyes" fill="#46584f">
+        <ellipse cx="76" cy="96" rx="9.5" ry="12.5" />
+        <ellipse cx="126" cy="96" rx="9.5" ry="12.5" />
       </g>
-      <g fill="none" stroke="#5d6f66" strokeOpacity="0.22" strokeWidth="6" strokeLinecap="round">
-        <path d="M64 72q8-6 16-3" />
-        <path d="M122 69q8-3 16 3" />
+      <g fill="#fff" fillOpacity="0.85" className="emily-glints">
+        <circle cx="79" cy="91" r="3" />
+        <circle cx="129" cy="91" r="3" />
       </g>
+      <path className="emily-smile" d="M92 118q9 7 18 0" fill="none" stroke="#46584f" strokeWidth="4.5" strokeLinecap="round" />
     </svg>
   )
 }
 
-function Brand() {
+function CheckIcon() {
   return (
-    <div className="brand">
-      <EmilyCloud />
-      <span className="wordmark">Emily</span>
+    <svg viewBox="0 0 20 20" aria-hidden="true">
+      <path d="m4.5 10.6 3.6 3.6 7.4-8" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+function AlertIcon() {
+  return (
+    <svg viewBox="0 0 20 20" aria-hidden="true">
+      <path d="M10 3 17.8 16.5H2.2L10 3Z" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
+      <path d="M10 8.2v3.6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      <circle cx="10" cy="14.1" r="1.1" fill="currentColor" />
+    </svg>
+  )
+}
+
+function ClockIcon() {
+  return (
+    <svg viewBox="0 0 20 20" aria-hidden="true">
+      <circle cx="10" cy="10" r="7.2" fill="none" stroke="currentColor" strokeWidth="2" />
+      <path d="M10 6v4.2l2.6 1.7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+// "I'm on my way". If this phone does not know who is holding it yet, the same
+// button asks, and the answer both confirms and is remembered.
+function OnMyWay({
+  names,
+  who,
+  onGo,
+  compact = false,
+}: {
+  names: string[]
+  who: string | null
+  onGo: (name: string) => Promise<void>
+  compact?: boolean
+}) {
+  const [choosing, setChoosing] = useState(false)
+  const [sending, setSending] = useState(false)
+
+  const go = async (name: string) => {
+    setSending(true)
+    try {
+      await onGo(name)
+    } finally {
+      setSending(false)
+      setChoosing(false)
+    }
+  }
+
+  if (choosing || (who === null && !compact)) {
+    return (
+      <div className={compact ? 'go-who go-who-compact' : 'go-who'}>
+        <p id="go-who-label">Who is on the way?</p>
+        <div role="group" aria-labelledby="go-who-label">
+          {names.map((name) => (
+            <button key={name} type="button" className="go" onClick={() => go(name)} disabled={sending}>
+              {name}
+            </button>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
+  if (compact) {
+    return (
+      <button
+        type="button"
+        className="go-link"
+        onClick={() => (who === null ? setChoosing(true) : go(who))}
+        disabled={sending}
+      >
+        {sending ? 'Sending…' : 'I’m on my way'}
+      </button>
+    )
+  }
+
+  return (
+    <div className="go-wrap">
+      <button type="button" className="go" onClick={() => go(who!)} disabled={sending}>
+        {sending ? 'Sending…' : 'I’m on my way'}
+      </button>
+      <p className="go-as">
+        Confirming as {who}.{' '}
+        <button type="button" className="text-button" onClick={() => setChoosing(true)}>
+          Not you?
+        </button>
+      </p>
     </div>
   )
 }
 
-type Tone = 'emergency' | 'precautionary' | 'calm' | 'checking'
-
-// What the family needs to know about one fall, in words (never colour alone).
-function describe(incident: Incident): { tone: Tone; label: string; state: string; open: boolean } {
-  switch (incident.status) {
-    case 'emergency':
-      return { tone: 'emergency', label: 'Emergency', state: 'Unconfirmed', open: true }
-    case 'precautionary':
-      return { tone: 'precautionary', label: 'Possible fall', state: 'Unconfirmed', open: true }
-    case 'acknowledged':
-      return {
-        tone: 'calm',
-        label: incident.level === 'precautionary' ? 'Possible fall' : 'Emergency',
-        state: `${incident.acknowledgedBy ?? 'Someone'} is on the way`,
-        open: false,
-      }
-    case 'closed':
-      return { tone: 'calm', label: 'No alert', state: 'Was OK', open: false }
-    default:
-      return { tone: 'checking', label: 'Fall detected', state: 'Checking', open: false }
-  }
-}
-
-function ToneIcon({ tone }: { tone: Tone }) {
-  if (tone === 'emergency' || tone === 'precautionary') {
-    return (
-      <svg viewBox="0 0 20 20" aria-hidden="true">
-        <path d="M10 2.5 18.5 17h-17L10 2.5Z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-        <path d="M10 8v4.2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-        <circle cx="10" cy="14.6" r="1" fill="currentColor" />
-      </svg>
-    )
-  }
-  if (tone === 'calm') {
-    return (
-      <svg viewBox="0 0 20 20" aria-hidden="true">
-        <circle cx="10" cy="10" r="7.6" fill="none" stroke="currentColor" strokeWidth="1.8" />
-        <path d="m6.6 10.3 2.3 2.3 4.5-4.9" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
-    )
-  }
-  return (
-    <svg viewBox="0 0 20 20" aria-hidden="true">
-      <circle cx="10" cy="10" r="7.6" fill="none" stroke="currentColor" strokeWidth="1.8" />
-      <path d="M10 5.8V10l2.8 1.8" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-    </svg>
-  )
-}
-
-function StatusCard({ overview, now }: { overview: Overview; now: number }) {
-  const { personName, lastHeartbeat, battery } = overview
+// The top of the page answers one question: is she OK right now?
+function NowPanel({
+  overview,
+  now,
+  who,
+  onGo,
+}: {
+  overview: Overview
+  now: number
+  who: string | null
+  onGo: (incidentId: Id<'incidents'>, name: string) => Promise<void>
+}) {
+  const { personName, lastHeartbeat, battery, familyNames } = overview
+  const latest = overview.incidents[0]
+  const fresh = latest !== undefined && now - latest.createdAt < FRESH_FALL_MS ? latest : null
   const never = lastHeartbeat === null
   const online = !never && now - lastHeartbeat < NO_SIGNAL_AFTER_MS
-  const headline = never
-    ? `Waiting for ${personName}'s watch`
-    : online
-      ? `${personName} is protected`
-      : `No signal since ${timeFormat.format(lastHeartbeat)}`
+
+  let mood: Mood = 'calm'
+  let headline = `${personName} is protected`
+  let detail: string | null = null
+  let quote: string | null = null
+  let action: Incident | null = null
+
+  if (fresh && isOpen(fresh)) {
+    mood = 'alert'
+    headline =
+      fresh.status === 'emergency'
+        ? `${personName} fell at ${timeFormat.format(fresh.createdAt)}`
+        : `${personName} may have fallen at ${timeFormat.format(fresh.createdAt)}`
+    quote = fresh.transcript
+    detail = fresh.transcript ? null : `No answer from ${personName} yet.`
+    action = fresh
+  } else if (fresh && fresh.status === 'asking') {
+    mood = 'alert'
+    headline = `Possible fall at ${timeFormat.format(fresh.createdAt)}`
+    detail = `Emily is asking ${personName} if everything is OK.`
+  } else if (fresh && fresh.status === 'acknowledged') {
+    headline = `${fresh.acknowledgedBy ?? 'Someone'} is on the way`
+    detail = `${personName} fell at ${timeFormat.format(fresh.createdAt)}. Emily told ${personName} that help is coming.`
+  } else if (never) {
+    mood = 'plain'
+    headline = `Waiting for ${personName}’s watch`
+    detail = 'It has not connected yet.'
+  } else if (!online) {
+    mood = 'alert'
+    headline = `No signal since ${timeFormat.format(lastHeartbeat)}`
+    detail = `Emily cannot reach ${personName}’s watch. It may be off or out of Wi-Fi.`
+  }
+
+  const watchLine = never
+    ? null
+    : `Watch seen ${formatAgo(lastHeartbeat, now)}${battery !== null ? ` · battery ${Math.round(battery)}%` : ''}`
 
   return (
-    <section className={`status ${online ? 'status-on' : 'status-off'}`} aria-live="polite">
-      <span className="status-dot" aria-hidden="true" />
-      <div>
+    <section className={`now now-${mood}`} aria-live="polite">
+      <div className="now-inner">
+        <div className="brand">
+          <EmilyCloud mood={mood} />
+          <span className="wordmark">Emily</span>
+        </div>
+
         <h1>{headline}</h1>
-        <p>
-          {never
-            ? 'The watch has not connected yet.'
-            : `Watch last seen ${formatAgo(lastHeartbeat, now)}`}
-          {battery !== null && ` · Battery ${Math.round(battery)}%`}
-        </p>
+        {quote && <blockquote>“{quote}”</blockquote>}
+        {detail && <p className="now-detail">{detail}</p>}
+
+        {action && (
+          <OnMyWay names={familyNames} who={who} onGo={(name) => onGo(action._id, name)} />
+        )}
+
+        {watchLine && <p className="now-watch">{watchLine}</p>}
       </div>
     </section>
   )
 }
 
-function WhoPicker({
+function stateOf(incident: Incident): { kind: 'ok' | 'alert' | 'wait'; text: string } {
+  switch (incident.status) {
+    case 'acknowledged':
+      return { kind: 'ok', text: `${incident.acknowledgedBy ?? 'Someone'} went` }
+    case 'closed':
+      return { kind: 'ok', text: 'Was OK' }
+    case 'emergency':
+      return { kind: 'alert', text: 'Emergency, nobody confirmed' }
+    case 'precautionary':
+      return { kind: 'alert', text: 'Possible fall, nobody confirmed' }
+    default:
+      return { kind: 'wait', text: 'Emily is checking' }
+  }
+}
+
+function FallRow({
+  incident,
   names,
   who,
-  onPick,
+  onGo,
+  showAction,
 }: {
+  incident: Incident
   names: string[]
   who: string | null
-  onPick: (name: string) => void
+  onGo: (incidentId: Id<'incidents'>, name: string) => Promise<void>
+  showAction: boolean
 }) {
-  if (names.length === 0) return null
+  const state = stateOf(incident)
   return (
-    <fieldset className="who">
-      <legend>You are</legend>
-      {names.map((name) => (
-        <label key={name} className={name === who ? 'who-chip who-chip-on' : 'who-chip'}>
-          <input type="radio" name="who" checked={name === who} onChange={() => onPick(name)} />
-          {name}
-        </label>
-      ))}
-    </fieldset>
+    <li className="fall">
+      <p className="fall-when">
+        <time dateTime={new Date(incident.createdAt).toISOString()}>
+          {timeFormat.format(incident.createdAt)}
+        </time>
+        <span title="Strength of the impact">{incident.impactMaxG.toFixed(1)} g</span>
+      </p>
+      <div className="fall-body">
+        <p className={incident.transcript ? 'fall-said' : 'fall-said fall-silent'}>
+          {incident.transcript ? `“${incident.transcript}”` : 'No answer'}
+        </p>
+        <p className={`fall-state fall-state-${state.kind}`}>
+          {state.kind === 'ok' ? <CheckIcon /> : state.kind === 'alert' ? <AlertIcon /> : <ClockIcon />}
+          {state.text}
+        </p>
+        {showAction && (
+          <OnMyWay compact names={names} who={who} onGo={(name) => onGo(incident._id, name)} />
+        )}
+      </div>
+    </li>
   )
 }
 
-function IncidentCard({
-  incident,
+function History({
+  overview,
   now,
   who,
-  onAcknowledge,
+  onGo,
 }: {
-  incident: Incident
+  overview: Overview
   now: number
   who: string | null
-  onAcknowledge: (id: Id<'incidents'>) => Promise<void>
+  onGo: (incidentId: Id<'incidents'>, name: string) => Promise<void>
 }) {
-  const [sending, setSending] = useState(false)
-  const { tone, label, state, open } = describe(incident)
+  const { incidents, personName, familyNames } = overview
+  if (incidents.length === 0) {
+    return (
+      <section className="history">
+        <h2>Falls</h2>
+        <p className="quiet">None so far. If {personName} falls, it shows up here right away.</p>
+      </section>
+    )
+  }
 
-  const handleClick = async () => {
-    setSending(true)
-    try {
-      await onAcknowledge(incident._id)
-    } finally {
-      setSending(false)
-    }
+  // The fresh open fall already has the big button at the top of the page.
+  const leading = now - incidents[0].createdAt < FRESH_FALL_MS && isOpen(incidents[0]) ? incidents[0]._id : null
+  const days: { label: string; items: Incident[] }[] = []
+  for (const incident of incidents) {
+    const label = dayLabel(incident.createdAt, now)
+    const last = days[days.length - 1]
+    if (last && last.label === label) last.items.push(incident)
+    else days.push({ label, items: [incident] })
   }
 
   return (
-    <li className={`fall fall-${tone}`}>
-      <header>
-        <span className="fall-badge">
-          <ToneIcon tone={tone} />
-          {label}
-        </span>
-        <time dateTime={new Date(incident.createdAt).toISOString()}>
-          {formatWhen(incident.createdAt, now)}
-        </time>
-      </header>
-
-      {incident.transcript ? (
-        <blockquote>“{incident.transcript}”</blockquote>
-      ) : (
-        <p className="fall-silent">
-          {incident.status === 'asking' ? 'Emily is checking in.' : 'No answer recorded.'}
-        </p>
-      )}
-
-      <footer>
-        <span className="fall-state">{state}</span>
-        <span className="fall-impact">Impact {incident.impactMaxG.toFixed(1)} g</span>
-      </footer>
-
-      {open && (
-        <button type="button" className="go" onClick={handleClick} disabled={sending || who === null}>
-          {who === null ? 'Choose who you are first' : sending ? 'Sending…' : 'On my way'}
-        </button>
-      )}
-    </li>
+    <section className="history">
+      <h2>Falls</h2>
+      {days.map((day) => (
+        <div key={day.label} className="day">
+          <h3>{day.label}</h3>
+          <ul>
+            {day.items.map((incident) => (
+              <FallRow
+                key={incident._id}
+                incident={incident}
+                names={familyNames}
+                who={who}
+                onGo={onGo}
+                showAction={isOpen(incident) && incident._id !== leading}
+              />
+            ))}
+          </ul>
+        </div>
+      ))}
+    </section>
   )
 }
 
@@ -264,69 +397,48 @@ function App() {
   const [who, setWho] = useState<string | null>(readWho)
   const [error, setError] = useState<string | null>(null)
 
-  if (overview === undefined) {
+  if (overview === undefined || overview === null) {
     return (
-      <main className="page">
-        <Brand />
-        <p className="quiet">Loading…</p>
-      </main>
-    )
-  }
-  if (overview === null) {
-    return (
-      <main className="page">
-        <Brand />
-        <p className="quiet">This watch is not set up yet.</p>
+      <main>
+        <section className="now now-plain">
+          <div className="now-inner">
+            <div className="brand">
+              <EmilyCloud mood="plain" />
+              <span className="wordmark">Emily</span>
+            </div>
+            <h1>{overview === null ? 'This watch is not set up yet' : 'Connecting…'}</h1>
+          </div>
+        </section>
       </main>
     )
   }
 
   // A remembered name that is no longer in the family does not count.
   const activeWho = who !== null && overview.familyNames.includes(who) ? who : null
-  const pickWho = (name: string) => {
+
+  const go = async (incidentId: Id<'incidents'>, name: string) => {
     setWho(name)
     saveWho(name)
-  }
-
-  const acknowledge = async (incidentId: Id<'incidents'>) => {
-    if (activeWho === null) return
     setError(null)
     try {
-      const result = await onMyWay({ incidentId, name: activeWho })
-      if (!result.ok) setError('Could not confirm. Try again.')
+      const result = await onMyWay({ incidentId, name })
+      if (!result.ok) setError('That did not go through. Tap “I’m on my way” again.')
     } catch {
-      setError('Could not confirm. Check your connection and try again.')
+      setError('No connection. Check your internet and tap “I’m on my way” again.')
     }
   }
 
   return (
-    <main className="page">
-      <Brand />
-      <StatusCard overview={overview} now={now} />
-      <WhoPicker names={overview.familyNames} who={activeWho} onPick={pickWho} />
-
-      {error && (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      )}
-
-      <h2>Falls</h2>
-      {overview.incidents.length === 0 ? (
-        <p className="quiet">No falls recorded. {overview.personName}'s watch is keeping an eye out.</p>
-      ) : (
-        <ul className="falls">
-          {overview.incidents.map((incident) => (
-            <IncidentCard
-              key={incident._id}
-              incident={incident}
-              now={now}
-              who={activeWho}
-              onAcknowledge={acknowledge}
-            />
-          ))}
-        </ul>
-      )}
+    <main>
+      <NowPanel overview={overview} now={now} who={activeWho} onGo={go} />
+      <div className="page">
+        {error && (
+          <p className="error" role="alert">
+            {error}
+          </p>
+        )}
+        <History overview={overview} now={now} who={activeWho} onGo={go} />
+      </div>
     </main>
   )
 }

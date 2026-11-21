@@ -1,42 +1,42 @@
 :root {
-  /* Emily's two pastels, green and pink, on a near-white page. Green means all is
-     well; pink means look here. The deep shades are for text and borders only. */
-  --green: #cdebd8;
-  --green-soft: #eaf6ee;
-  --green-deep: #1f5c41;
-  --pink: #f9cdd8;
-  --pink-soft: #fdecf0;
-  --pink-deep: #9a2447;
+  /* Emily's two pastels on a near-white page. Green: all is well. Pink: look here.
+     The deep shades are the same hues, dark enough for text and for the one button. */
+  --green: #c6e9d3;
+  --green-soft: #e8f5ec;
+  --green-deep: #1d5a3f;
+  --pink: #f8c8d4;
+  --pink-soft: #fdeaef;
+  --pink-deep: #8f1f40;
 
-  --paper: #fcfbf9;
-  --card: #ffffff;
-  --ink: #2a2a2d;
-  --ink-soft: #66646a;
-  --line: #e8e5e1;
-
-  --emergency: var(--pink-deep);
-  --emergency-bg: var(--pink);
-  --caution: var(--pink-deep);
-  --caution-bg: var(--pink-soft);
-  --calm: var(--green-deep);
-  --calm-bg: var(--green-soft);
-  --checking: var(--ink-soft);
-  --checking-bg: #f1efec;
+  --paper: #fdfcfa;
+  --ink: #26292a;
+  --ink-soft: #5c6160;
+  --line: #e7e4df;
 
   --sans: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   /* Rounded like the Emily wordmark; falls back to the system sans. */
-  --round: ui-rounded, 'SF Pro Rounded', 'Hiragino Maru Gothic ProN', 'Nunito', var(--sans);
+  --round: ui-rounded, 'SF Pro Rounded', 'Nunito', var(--sans);
+
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 
   font-family: var(--sans);
   font-size: 17px;
   line-height: 1.45;
   color: var(--ink);
   background: var(--paper);
+  accent-color: var(--green-deep);
+  caret-color: var(--green-deep);
+  scrollbar-color: var(--green) transparent;
   -webkit-text-size-adjust: 100%;
 }
 
 * {
   box-sizing: border-box;
+}
+
+::selection {
+  background: var(--green);
+  color: var(--ink);
 }
 
 body {
@@ -47,14 +47,25 @@ body {
 
 h1,
 h2,
+h3,
 p,
 ul,
-blockquote,
-fieldset {
+blockquote {
   margin: 0;
   padding: 0;
 }
 
+ul {
+  list-style: none;
+}
+
 button {
   font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 3px solid var(--green-deep);
+  outline-offset: 3px;
+  border-radius: 6px;
 }
