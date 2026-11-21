@@ -43,6 +43,8 @@ bool readAccel(AccelSample &out) {
 void setup() {
   Serial.begin(SERIAL_BAUD);
   instance.begin();
+  // Turn the backlight on so the screen shows the watch is alive.
+  instance.setBrightness(DEVICE_MAX_BRIGHTNESS_LEVEL);
 
   // FS_8G so a 3 g impact is not clipped (the library example uses FS_2G).
   if (!instance.sensor->configAccelerometer(OperationMode::NORMAL,
