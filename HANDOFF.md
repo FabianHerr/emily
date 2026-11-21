@@ -292,7 +292,7 @@ Cosas que ya sabemos y que es fácil pasar por alto. Cada una dice en qué tarea
 | 6 | **Fabian debe generar dos audios** con la voz elegida y pasárselos a Sebastian: "Hi Rosa, it's Emily. Are you OK?" y "Rosa, it's Emily again. Are you OK?". El nombre "Rosa" queda grabado en el audio. | CJ-10 (después de CJ-12) |
 | 7 | **La clave de ElevenLabs tiene permisos amplios** (se autorizó la lista completa: clonar voces, doblaje, etc.). Termina en `8e98`. Borrarla en la cuenta de ElevenLabs después del hackathon. | Domingo, después de los jueces |
 | 8 | **La clave de ElevenLabs está en dos sitios:** `.env.local` (Mac de Fabian, ignorado por git) y Convex. El backend usa la de Convex. Si se cambia la clave, hay que actualizar las dos. | Solo si se cambia |
-| 9 | **Falta `PUSHOVER_APP_TOKEN` en Convex.** Es lo último de CJ-3 y lo necesita CJ-7. | CJ-3 |
+| 9 | ~~Falta `PUSHOVER_APP_TOKEN` en Convex.~~ **Hecho el 20 nov.** Falta comprobar que el token sea válido: se sabrá con el primer aviso. Cada familiar necesita además su propia clave de usuario de Pushover. | CJ-7 |
 | 10 | **Sebastian no corre `npx convex dev`.** Crearía otro backend con otra URL. El reloj apunta a `https://healthy-lark-748.convex.site`. | Siempre |
 | 11 | **Tablero: no guardar una tarea con el panel abierto desde hace rato.** Si otro (o Claude) la editó mientras tanto, "Guardar" pisa esos cambios con la copia vieja. Cerrar y volver a abrir antes de editar. | Siempre |
 | 12 | **El paso "cargar la clave por Vite" del asistente de ElevenLabs se omitió a propósito.** La clave no debe llegar al navegador; vive en Convex. Si `onboard check` lo vuelve a pedir, ignorarlo. | — |
