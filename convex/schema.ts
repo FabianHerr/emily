@@ -47,4 +47,23 @@ export default defineSchema({
     askAgain: v.boolean(),
     delivered: v.boolean(),
   }).index("by_deviceId_and_delivered", ["deviceId", "delivered"]),
+
+  // Activity feed for the family portal (CJ-28). One row per step, text ready to show.
+  // Written only through logEvent (convex/events.ts).
+  events: defineTable({
+    deviceId: v.string(),
+    incidentId: v.optional(v.id("incidents")),
+    type: v.union(
+      v.literal("fall_detected"),
+      v.literal("person_said"),
+      v.literal("no_answer"),
+      v.literal("alert_sent"),
+      v.literal("acknowledged"),
+      v.literal("watch_said"),
+      v.literal("incident_closed"),
+    ),
+    text: v.string(), // English, e.g. "Fall detected (impact 3.4 g)"
+    level: v.union(v.literal("info"), v.literal("precautionary"), v.literal("emergency")),
+    createdAt: v.number(), // ms since epoch
+  }).index("by_deviceId_and_createdAt", ["deviceId", "createdAt"]),
 });

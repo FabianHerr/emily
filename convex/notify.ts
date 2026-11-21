@@ -5,6 +5,7 @@
 import { v } from "convex/values";
 import { env, internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { joinNames } from "./events";
 
 const PUSHOVER_MESSAGES_URL = "https://api.pushover.net/1/messages.json";
 const PUSHOVER_RECEIPTS_URL = "https://api.pushover.net/1/receipts";
@@ -187,6 +188,22 @@ export const sendAlert = internalAction({
     const results = await Promise.all(targets.members.map(sendToMember));
     const sent = results.filter(Boolean).length;
     if (sent === 0) console.error(`sendAlert: NOBODY was alerted for ${args.incidentId}`);
+    // Activity feed: one row per sendAlert that reached at least one person. Names only.
+    if (sent > 0) {
+      const names = targets.members.filter((_, i) => results[i]).map((m) => m.name);
+      const label = args.level === "emergency" ? "Emergency" : "Precautionary";
+      try {
+        await ctx.runMutation(internal.events.log, {
+          deviceId: targets.deviceId,
+          incidentId: args.incidentId,
+          type: "alert_sent",
+          text: `${label} alert sent to ${joinNames(names)}`,
+          level: args.level,
+        });
+      } catch (error) {
+        console.error(`sendAlert: could not log the alert: ${String(error)}`);
+      }
+    }
     return { sent, failed: results.length - sent };
   },
 });

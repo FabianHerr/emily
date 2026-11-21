@@ -6,6 +6,7 @@ import { v } from "convex/values";
 import { internalAction, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { logEvent } from "./events";
 
 // Scheduled (never awaited) by the AI Service and by /ack, so the family alert never
 // waits for the audio. If the voice fails or times out, the message is queued with
@@ -96,6 +97,16 @@ export const poll = internalMutation({
       .first();
     if (!next) return { known: true as const, message: null };
     await ctx.db.patch("messages", next._id, { delivered: true });
+    // An "ask again" with no text says nothing new: not worth a feed row.
+    if (next.text.trim() !== "") {
+      await logEvent(ctx, {
+        deviceId: args.deviceId,
+        incidentId: next.incidentId,
+        type: "watch_said",
+        text: `Watch told ${device.personName}: "${next.text}"`,
+        level: "info",
+      });
+    }
     return {
       known: true as const,
       message: { text: next.text, askAgain: next.askAgain, audioId: next.audioId ?? null },

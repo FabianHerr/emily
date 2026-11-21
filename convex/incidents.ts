@@ -3,6 +3,7 @@ import { internalMutation, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { impactMessage } from "./decide";
+import { logEvent } from "./events";
 
 // Defaults for POST /fall when the watch leaves a value out.
 const DEFAULT_SECONDS_STILL = 0;
@@ -124,6 +125,13 @@ export const recordFall = internalMutation({
         audioIds: args.audioId !== undefined ? [args.audioId] : [],
         receipts: [],
         createdAt: Date.now(),
+      });
+      await logEvent(ctx, {
+        deviceId: args.deviceId,
+        incidentId,
+        type: "fall_detected",
+        text: `Fall detected (impact ${args.impactMaxG.toFixed(1)} g)`,
+        level: "info",
       });
       // Hand the new incident to the AI Service, in the same transaction as the write.
       // It transcribes, decides and alerts; with no clip it sends the fixed emergency
@@ -327,11 +335,39 @@ export const saveDecision = internalMutation({
     if (incident.round > args.round) return null;
     const isFinalNone = args.decision.level === "none" && !args.decision.ask_again;
     const canClose = incident.status === "asking" || incident.status === "precautionary";
+    const closes = isFinalNone && canClose;
     await ctx.db.patch("incidents", incident._id, {
       transcript: args.transcript,
       decision: args.decision,
-      ...(isFinalNone && canClose && { status: "closed" as const }),
+      ...(closes && { status: "closed" as const }),
     });
+
+    // Activity feed: only what the person said, never the AI's interpretation.
+    const device = await ctx.db
+      .query("devices")
+      .withIndex("by_deviceId", (q) => q.eq("deviceId", incident.deviceId))
+      .unique();
+    const personName = device?.personName ?? incident.deviceId;
+    const level = args.decision.level === "none" ? "info" : args.decision.level;
+    await logEvent(ctx, {
+      deviceId: incident.deviceId,
+      incidentId: incident._id,
+      ...(args.transcript !== null
+        ? { type: "person_said", text: `${personName} said: "${args.transcript}"` }
+        : { type: "no_answer", text: `${personName} did not answer (round ${args.round})` }),
+      level,
+    });
+    if (closes) {
+      // "precautionary" means an alert already went out (e.g. the last defence).
+      const outcome = incident.status === "asking" ? "No alert sent." : "Incident closed.";
+      await logEvent(ctx, {
+        deviceId: incident.deviceId,
+        incidentId: incident._id,
+        type: "incident_closed",
+        text: `${personName} said they are OK. ${outcome}`,
+        level: "info",
+      });
+    }
     return null;
   },
 });
@@ -364,6 +400,13 @@ export const acknowledge = internalMutation({
     await ctx.db.patch("incidents", incident._id, {
       status: "acknowledged",
       acknowledgedBy: name,
+    });
+    await logEvent(ctx, {
+      deviceId: incident.deviceId,
+      incidentId: incident._id,
+      type: "acknowledged",
+      text: `${name} is on the way`,
+      level: "info",
     });
     // For the watch to say (Talk to Loved One adds the audio; GET /poll delivers it).
     await ctx.scheduler.runAfter(0, internal.talk.say, {
