@@ -2,6 +2,7 @@
 // CJ-4: read the BMA423 accelerometer at 50 Hz and keep the last 3 s in a ring buffer.
 // CJ-5: detect a fall with thresholds, vibrate and show the values on screen.
 // CJ-8: connect to the phone hotspot and POST the fall to Convex (HANDOFF section 6).
+// CJ-10: after a fall, play "Are you OK?" and record 5 s from the microphone.
 
 #include <LilyGoLib.h>
 #include <LV_Helper.h>
@@ -10,6 +11,7 @@
 #include <HTTPClient.h>
 #include <math.h>
 #include "secrets.h"
+#include "are_you_ok.h"  // round 1 question as a WAV array (made with watch/tools/wav2h.js)
 
 // ---- Tunable constants ----
 const uint32_t SERIAL_BAUD = 115200;
@@ -44,6 +46,16 @@ const uint32_t SEND_RETRY_MS = 5000;
 const int SEND_MAX_RETRIES = 6;               // after the first attempt
 const float MODEL_CONFIDENCE = 1.0f;          // no model yet (CJ-22)
 const uint32_t SCREEN_WIFI_REFRESH_MS = 1000;
+
+// Asking "Are you OK?" and recording the answer (CJ-10).
+const uint8_t SPEAKER_VOLUME = 100;
+const uint32_t AFTER_QUESTION_MS = 300;       // so we do not record our own speaker
+const size_t RECORD_SECONDS = 5;
+const uint16_t RECORD_SAMPLE_RATE = 16000;
+const uint8_t RECORD_CHANNELS = 1;            // mono
+const float MIC_GAIN_DB = 12.0f;              // software gain with soft clipping; library default is 0 on core 3.x.
+                                              // 20 dB measured rms -5.7 dB / peak 0 dB (too hot); 12 dB aims ~ -14 dB rms
+const bool PLAY_BACK_RECORDING = true;        // CJ-10 test: play the answer back; CJ-11 sends it instead
 
 struct AccelSample {
   uint32_t tMs;
@@ -89,6 +101,11 @@ volatile bool sendRequested = false;
 FallEvent fallToSend;
 String incidentId;             // from the last POST /fall answer
 SendStatus shownSendStatus = SendStatus::Idle;
+volatile bool noConnectionBuzz = false;  // set by the send task when the first attempt fails
+
+// The question and the recording block for ~8 s, so they run from loop(), not from a UI callback.
+bool askRequested = false;
+int recordingsDone = 0;
 
 // Screen.
 lv_obj_t *statusLabel;
@@ -150,9 +167,68 @@ void onFall(const FallEvent &f) {
   showFall(f);
   Serial.printf("FALL impact_max_g=%.2f seconds_still=%d position_changed=%d free_fall=%d\n",
                 f.impactMaxG, f.secondsStill, f.positionChanged, f.freeFall);
-  // Detect -> vibrate -> send.
+  // Detect -> vibrate -> send (in the background) -> ask "Are you OK?" and record.
   fallToSend = f;
   sendRequested = true;
+  askRequested = true;
+}
+
+// Loudness of a 16-bit recording, to tune MIC_GAIN_DB (0 dB = full scale).
+void printLevel(const uint8_t *pcm, size_t bytes) {
+  const int16_t *s = (const int16_t *)pcm;
+  size_t n = bytes / 2;
+  double sum = 0;
+  int peak = 0;
+  for (size_t i = 0; i < n; i++) {
+    sum += (double)s[i] * s[i];
+    int a = abs((int)s[i]);
+    if (a > peak) peak = a;
+  }
+  float rmsDb = n ? 20.0f * log10f(sqrtf(sum / n) / 32768.0f + 1e-9f) : -99;
+  float peakDb = 20.0f * log10f(peak / 32768.0f + 1e-9f);
+  Serial.printf("LEVEL rms=%.1f dB peak=%.1f dB gain=%.0f dB\n", rmsDb, peakDb, MIC_GAIN_DB);
+}
+
+void refreshScreenNow() {
+  lv_timer_handler();
+  lv_refr_now(NULL);
+}
+
+// Blocking: ~2 s question + 0.3 s + 5 s recording. The fall is already detected and sent
+// in the background, so pausing the accelerometer here is fine.
+void askAndRecord() {
+  AudioOutputIf *out = instance.getAudioOutput();
+  AudioInputIf *in = instance.getAudioInput();
+
+  lv_label_set_text(statusLabel, "Are you OK?");
+  refreshScreenNow();
+  out->setVolume(SPEAKER_VOLUME);
+  out->playWAV((uint8_t *)are_you_ok_wav, are_you_ok_wav_len);
+  delay(AFTER_QUESTION_MS);
+
+  lv_label_set_text(statusLabel, "Listening...");
+  refreshScreenNow();
+  uint8_t *wav = nullptr;
+  size_t wavSize = 0;
+  uint32_t t0 = millis();
+  in->setMicGain(MIC_GAIN_DB);
+  bool ok = in->recordWAV(RECORD_SECONDS, &wav, &wavSize, RECORD_SAMPLE_RATE, RECORD_CHANNELS);
+  recordingsDone++;
+  Serial.printf("RECORD ok=%d size=%u in %lu ms count=%d free_psram=%u\n", ok, (unsigned)wavSize,
+                (unsigned long)(millis() - t0), recordingsDone, (unsigned)ESP.getFreePsram());
+  if (ok) printLevel(wav + PCM_WAV_HEADER_SIZE, wavSize - PCM_WAV_HEADER_SIZE);
+
+  if (ok && PLAY_BACK_RECORDING) {
+    lv_label_set_text(statusLabel, "Playing back");
+    refreshScreenNow();
+    out->playWAV(wav, wavSize);
+  }
+  if (wav) free(wav);  // CJ-11 will send it before freeing
+
+  // Show the send status again (it may have changed while we were blocked).
+  shownSendStatus = SendStatus::Idle;
+  lv_label_set_text(statusLabel, "Fall detected");
+  nextSampleMs = millis();  // restart sampling cleanly after the pause
 }
 
 // One POST /fall. Returns true and fills incidentId on HTTP 200.
@@ -202,6 +278,7 @@ void sendTask(void *) {
     FallEvent f = fallToSend;
     sendStatus = SendStatus::Sending;
     bool ok = postFall(f);
+    if (!ok) noConnectionBuzz = true;
     for (int retry = 1; !ok && retry <= SEND_MAX_RETRIES && !sendRequested; retry++) {
       sendStatus = SendStatus::Retrying;
       Serial.printf("SEND retry %d/%d in %lu ms\n", retry, SEND_MAX_RETRIES, (unsigned long)SEND_RETRY_MS);
@@ -214,14 +291,16 @@ void sendTask(void *) {
 
 // Called from loop(): screen and vibration follow the send task.
 void updateSendScreen() {
+  if (noConnectionBuzz) {
+    noConnectionBuzz = false;
+    vibrate();  // 3 buzzes when the first attempt fails
+  }
   SendStatus s = sendStatus;
   if (s == shownSendStatus) return;
-  bool firstFailure = s == SendStatus::Retrying && shownSendStatus == SendStatus::Sending;
   shownSendStatus = s;
   if (s == SendStatus::Sending) lv_label_set_text(statusLabel, "Sending...");
   if (s == SendStatus::Sent) lv_label_set_text(statusLabel, "Help notified");
   if (s == SendStatus::Retrying || s == SendStatus::Failed) lv_label_set_text(statusLabel, "No connection");
-  if (firstFailure) vibrate();  // 3 buzzes when the first attempt fails
 }
 
 void updateWifiScreen() {
@@ -380,6 +459,10 @@ void setup() {
 void loop() {
   instance.loop();
   lv_timer_handler();
+  if (askRequested) {
+    askRequested = false;
+    askAndRecord();
+  }
   updateSendScreen();
   updateWifiScreen();
 
