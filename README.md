@@ -1,6 +1,6 @@
-# CodeJam 16: fall-detection watch
+# Emily: fall-detection watch
 
-A watch that detects when an older adult falls, asks out loud if they are OK, and alerts their family. Sensors only, no cameras.
+Emily is a watch that detects when an older adult falls, asks out loud if they are OK, and alerts their family. Sensors only, no cameras.
 
 Built from scratch during McGill CodeJam 16 (Nov 20-22, 2026).
 
