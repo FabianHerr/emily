@@ -4,6 +4,7 @@
 // CJ-8: connect to the phone hotspot and POST the fall to Convex (HANDOFF section 6).
 // CJ-10: after a fall, play "Are you OK?" and record 5 s from the microphone.
 // CJ-11: send that recording as the body of POST /fall.
+// CJ-15: poll Convex for Emily's reply, show it and play it.
 
 #include <LilyGoLib.h>
 #include <LV_Helper.h>
@@ -64,6 +65,19 @@ const int AUDIO_SEND_TRIES = 2;               // one try + one retry, then send 
 const uint32_t AUDIO_WIFI_WAIT_MS = 15000;    // wait this long for WiFi before giving up on the audio
 const uint32_t SEND_TASK_STACK = 12288;       // TLS + HTTP in the send task
 
+// Getting Emily's reply (CJ-15).
+const uint32_t POLL_RUSH_MS = 1000;           // first minute after the fall, when Emily's reply comes
+const uint32_t RUSH_POLL_WINDOW_MS = 60000;
+const uint32_t POLL_FAST_MS = 3000;           // rest of the incident (e.g. "Lucie is on her way")
+const uint32_t POLL_IDLE_MS = 60000;          // normal day (also the heartbeat)
+const uint32_t FAST_POLL_WINDOW_MS = 5UL * 60 * 1000;  // back to 60 s 5 min after the fall
+const uint32_t POLL_HTTP_TIMEOUT_MS = 5000;
+const uint32_t REPLY_AUDIO_TIMEOUT_MS = 10000;
+const size_t MAX_REPLY_WAV_BYTES = 1024 * 1024;  // reject anything bigger (3 s of voice ~ 96 KB)
+const uint8_t VIBRATION_BEFORE_REPLY = 1;     // one buzz before Emily speaks
+const uint8_t VIBRATION_TEXT_ONLY = 2;        // two buzzes when there is only text (plan C)
+const size_t REPLY_TEXT_MAX = 256;
+
 struct AccelSample {
   uint32_t tMs;
   float x, y, z;  // g
@@ -113,6 +127,17 @@ uint8_t *volatile audioToSend = nullptr;  // recording handed to the send task (
 volatile size_t audioToSendLen = 0;
 portMUX_TYPE handoffMux = portMUX_INITIALIZER_UNLOCKED;  // guards the hand-off between loop() and the task
 
+// Reply hand-off: the send task fills these and sets replyReady; loop() plays and clears it.
+volatile bool replyReady = false;
+uint8_t *replyWav = nullptr;       // ps_malloc'd WAV or null; loop() frees it
+size_t replyWavLen = 0;
+char replyText[REPLY_TEXT_MAX];
+bool replyAskAgain = false;
+volatile bool audioBusy = false;   // loop() is recording or playing: do not poll (card CJ-15)
+volatile uint32_t fastPollUntilMs = 0;
+volatile uint32_t rushPollUntilMs = 0;
+uint32_t recordEndMs = 0;          // to measure "recording ends -> watch speaks"
+
 // The question and the recording block for ~8 s, so they run from loop(), not from a UI callback.
 bool askRequested = false;
 int recordingsDone = 0;
@@ -156,9 +181,9 @@ float angleBetweenDeg(const float a[3], const float b[3]) {
   return acosf(c) * 180.0f / (float)M_PI;
 }
 
-void vibrate() {
-  for (uint8_t i = 0; i < VIBRATION_REPEATS; i++) instance.drv.setWaveform(i, VIBRATION_EFFECT);
-  instance.drv.setWaveform(VIBRATION_REPEATS, 0);  // end of sequence
+void vibrate(uint8_t repeats = VIBRATION_REPEATS) {
+  for (uint8_t i = 0; i < repeats; i++) instance.drv.setWaveform(i, VIBRATION_EFFECT);
+  instance.drv.setWaveform(repeats, 0);  // end of sequence
   instance.drv.run();
 }
 
@@ -208,6 +233,7 @@ void refreshScreenNow() {
 void askAndRecord() {
   AudioOutputIf *out = instance.getAudioOutput();
   AudioInputIf *in = instance.getAudioInput();
+  audioBusy = true;
 
   lv_label_set_text(statusLabel, "Are you OK?");
   refreshScreenNow();
@@ -222,6 +248,7 @@ void askAndRecord() {
   uint32_t t0 = millis();
   in->setMicGain(MIC_GAIN_DB);
   bool ok = in->recordWAV(RECORD_SECONDS, &wav, &wavSize, RECORD_SAMPLE_RATE, RECORD_CHANNELS);
+  recordEndMs = millis();
   recordingsDone++;
   Serial.printf("RECORD ok=%d size=%u in %lu ms count=%d free_psram=%u\n", ok, (unsigned)wavSize,
                 (unsigned long)(millis() - t0), recordingsDone, (unsigned)ESP.getFreePsram());
@@ -250,6 +277,7 @@ void askAndRecord() {
 
   shownSendStatus = SendStatus::Idle;
   lv_label_set_text(statusLabel, "Fall detected");
+  audioBusy = false;
   nextSampleMs = millis();  // restart sampling cleanly after the pause
 }
 
@@ -316,9 +344,143 @@ int postFall(const FallEvent &f, uint8_t *audio, size_t len, uint32_t timeoutMs)
 // 400/404 will not get better by retrying (bad request, unknown device).
 bool isFinalError(int code) { return code == 400 || code == 404; }
 
+// ---- CJ-15: getting Emily's reply ----
+
+// Reads "key":"value" from the small flat JSON that /poll returns (JSON.stringify, no spaces)
+// and unescapes it. No JSON library needed for three fields.
+bool jsonString(const String &body, const char *key, String &out) {
+  String k = String("\"") + key + "\":\"";
+  int i = body.indexOf(k);
+  if (i < 0) return false;
+  i += k.length();
+  out = "";
+  while (i < (int)body.length()) {
+    char c = body[i++];
+    if (c == '"') return true;
+    if (c == '\\' && i < (int)body.length()) {
+      char e = body[i++];
+      if (e == 'n') out += '\n';
+      else if (e == 'u') { i += 4; out += '?'; }  // rare in English replies
+      else out += e;                             // \" \\ \/
+    } else {
+      out += c;
+    }
+  }
+  return false;
+}
+
+// Collects an HTTP body into a fixed PSRAM buffer (used with HTTPClient::writeToStream,
+// which also handles chunked bodies). Returns 0 when full, so oversize bodies fail.
+struct BufStream : Stream {
+  uint8_t *buf;
+  size_t cap, len = 0;
+  BufStream(uint8_t *b, size_t c) : buf(b), cap(c) {}
+  size_t write(uint8_t b) override { return write(&b, 1); }
+  size_t write(const uint8_t *p, size_t n) override {
+    if (len + n > cap) return 0;
+    memcpy(buf + len, p, n);
+    len += n;
+    return n;
+  }
+  int available() override { return 0; }
+  int read() override { return -1; }
+  int peek() override { return -1; }
+};
+
+// Downloads Emily's reply WAV into PSRAM. The caller frees *out.
+bool getReplyWav(const String &url, uint8_t **out, size_t *outLen) {
+  WiFiClientSecure client;
+  client.setInsecure();
+  client.setHandshakeTimeout(REPLY_AUDIO_TIMEOUT_MS / 1000);
+  HTTPClient http;
+  http.setConnectTimeout(REPLY_AUDIO_TIMEOUT_MS);
+  http.setTimeout(REPLY_AUDIO_TIMEOUT_MS);
+  if (!http.begin(client, url)) return false;
+  uint32_t t0 = millis();
+  int code = http.GET();
+  int size = http.getSize();
+  if (code != 200 || size > (int)MAX_REPLY_WAV_BYTES) {
+    Serial.printf("AUDIO http=%d size=%d rejected\n", code, size);
+    http.end();
+    return false;
+  }
+  size_t cap = size > 0 ? (size_t)size : MAX_REPLY_WAV_BYTES;
+  uint8_t *buf = (uint8_t *)ps_malloc(cap);
+  if (!buf) {
+    http.end();
+    return false;
+  }
+  BufStream bs(buf, cap);
+  int written = http.writeToStream(&bs);
+  http.end();
+  Serial.printf("AUDIO http=%d bytes=%u in %lu ms\n", code, (unsigned)bs.len, (unsigned long)(millis() - t0));
+  if (written < 0 || bs.len < 44) {
+    free(buf);
+    return false;
+  }
+  *out = buf;
+  *outLen = bs.len;
+  return true;
+}
+
+// One GET /poll. Returns 1 if a message was handed to loop(), 0 if the queue is empty,
+// -1 on error. With deliver=false the message is read and dropped (boot clean-up).
+int pollOnce(bool deliver) {
+  if (WiFi.status() != WL_CONNECTED) return -1;
+  WiFiClientSecure client;
+  client.setInsecure();
+  client.setHandshakeTimeout(POLL_HTTP_TIMEOUT_MS / 1000);
+  HTTPClient http;
+  http.setConnectTimeout(POLL_HTTP_TIMEOUT_MS);
+  http.setTimeout(POLL_HTTP_TIMEOUT_MS);
+  if (!http.begin(client, String(CONVEX_SITE_URL) + "/poll?device=" + DEVICE_ID)) return -1;
+  int code = http.GET();
+  String body = code > 0 ? http.getString() : "";
+  http.end();
+  if (code != 200) {
+    Serial.printf("POLL http=%d\n", code);
+    return -1;
+  }
+  String text, audioUrl;
+  if (!jsonString(body, "text", text)) return 0;  // {} = nothing waiting
+  bool askAgain = body.indexOf("\"askAgain\":true") >= 0;
+  bool hasAudio = jsonString(body, "audioUrl", audioUrl);
+  Serial.printf("POLL text=\"%s\" askAgain=%d audio=%d%s\n", text.c_str(), askAgain, hasAudio,
+                deliver ? "" : " (old message, dropped)");
+  if (!deliver) return 1;
+
+  uint8_t *wav = nullptr;
+  size_t wavLen = 0;
+  // The message is marked delivered before we download, so retry the audio once.
+  if (hasAudio && !getReplyWav(audioUrl, &wav, &wavLen)) getReplyWav(audioUrl, &wav, &wavLen);
+
+  strlcpy(replyText, text.c_str(), sizeof(replyText));
+  replyAskAgain = askAgain;
+  replyWav = wav;
+  replyWavLen = wavLen;
+  replyReady = true;
+  return 1;
+}
+
 void sendTask(void *) {
+  // Drop replies left over from earlier tests, so they do not play during the next fall
+  // (/poll does not say which incident a message belongs to).
+  while (pollOnce(false) == 1) {}
+  uint32_t nextPollMs = millis();
+
   for (;;) {
     if (!sendRequested) {
+      // Poll for Emily's reply: every 3 s during an incident, every 60 s otherwise.
+      // Not while loop() records or plays, and not until loop() took the last reply.
+      uint32_t now = millis();
+      if (!audioBusy && !replyReady && (int32_t)(now - nextPollMs) >= 0) {
+        int r = pollOnce(true);
+        bool rush = (int32_t)(rushPollUntilMs - now) > 0;
+        bool fast = (int32_t)(fastPollUntilMs - now) > 0;
+        uint32_t wait = rush ? POLL_RUSH_MS : (fast ? POLL_FAST_MS : POLL_IDLE_MS);
+        // A message arrived: poll again right away (several can be queued).
+        nextPollMs = millis() + (r == 1 ? 0 : wait);
+      }
       vTaskDelay(pdMS_TO_TICKS(50));
       continue;
     }
@@ -355,6 +517,11 @@ void sendTask(void *) {
     }
     if (isFinalError(code)) Serial.printf("SEND gave up: http=%d\n", code);
     if (sendRequested) continue;  // a newer fall is waiting; its status comes next
+    if (code == 200) {
+      fastPollUntilMs = millis() + FAST_POLL_WINDOW_MS;
+      rushPollUntilMs = millis() + RUSH_POLL_WINDOW_MS;
+      nextPollMs = millis() + POLL_RUSH_MS;
+    }
     sendStatus = code == 200 ? SendStatus::Sent : SendStatus::Failed;
   }
 }
@@ -371,6 +538,65 @@ void updateSendScreen() {
   if (s == SendStatus::Sending) lv_label_set_text(statusLabel, "Sending...");
   if (s == SendStatus::Sent) lv_label_set_text(statusLabel, "Help notified");
   if (s == SendStatus::Retrying || s == SendStatus::Failed) lv_label_set_text(statusLabel, "No connection");
+}
+
+// Plays a WAV after checking its header ourselves: LilyGoLib's playWAV trusts the sizes in
+// the header, and the reply comes from the network.
+bool playReply(const uint8_t *w, size_t n) {
+  if (n < 12 || memcmp(w, "RIFF", 4) != 0 || memcmp(w + 8, "WAVE", 4) != 0) return false;
+  uint16_t fmt = 0, ch = 0, bits = 0;
+  uint32_t rate = 0;
+  size_t p = 12;
+  while (p + 8 <= n) {
+    uint32_t sz;
+    memcpy(&sz, w + p + 4, 4);
+    if (memcmp(w + p, "fmt ", 4) == 0 && p + 24 <= n) {
+      memcpy(&fmt, w + p + 8, 2);
+      memcpy(&ch, w + p + 10, 2);
+      memcpy(&rate, w + p + 12, 4);
+      memcpy(&bits, w + p + 22, 2);
+    } else if (memcmp(w + p, "data", 4) == 0) {
+      if (fmt != 1 || ch == 0 || bits != 16 || rate == 0) return false;
+      size_t len = min((size_t)sz, n - (p + 8));  // the size can be 0xFFFFFFFF in streamed WAVs
+      Serial.printf("REPLY wav rate=%lu ch=%u bits=%u pcm=%u header=%u\n", (unsigned long)rate, ch, bits,
+                    (unsigned)len, (unsigned)(p + 8));
+      AudioOutputIf *out = instance.getAudioOutput();
+      out->setVolume(SPEAKER_VOLUME);
+      out->open(bits, ch, rate);
+      out->write((uint8_t *)w + p + 8, len);
+      out->close();
+      return true;
+    }
+    if (sz > n) return false;
+    p += 8 + sz + (sz & 1);
+  }
+  return false;
+}
+
+// Called from loop() when the send task got a message from /poll.
+void handleReply() {
+  audioBusy = true;
+  bool hasText = replyText[0] != '\0';
+  if (hasText) {
+    lv_label_set_text(statusLabel, "Emily says:");
+    lv_label_set_text(valuesLabel, replyText);
+    refreshScreenNow();
+  }
+  bool spoke = false;
+  if (replyWav) {
+    vibrate(VIBRATION_BEFORE_REPLY);
+    delay(300);  // let the buzz finish before the voice
+    uint32_t sinceRecord = millis() - recordEndMs;
+    spoke = playReply(replyWav, replyWavLen);
+    Serial.printf("REPLY played=%d, %lu ms after the recording ended\n", spoke, (unsigned long)sinceRecord);
+    free(replyWav);
+    replyWav = nullptr;
+  }
+  if (!spoke && hasText) vibrate(VIBRATION_TEXT_ONLY);  // plan C: text only
+  if (replyAskAgain) Serial.println("REPLY askAgain=1 (round 2 comes in CJ-17)");
+  replyReady = false;
+  audioBusy = false;
+  nextSampleMs = millis();
 }
 
 void updateWifiScreen() {
@@ -482,6 +708,8 @@ void setupScreen() {
   lv_obj_set_style_text_font(valuesLabel, &lv_font_montserrat_20, 0);
   lv_label_set_text(valuesLabel, "");
   lv_obj_align(valuesLabel, LV_ALIGN_TOP_LEFT, 12, 55);
+  lv_obj_set_width(valuesLabel, 216);                       // Emily's reply wraps
+  lv_label_set_long_mode(valuesLabel, LV_LABEL_LONG_WRAP);
 
   wifiLabel = lv_label_create(lv_screen_active());
   lv_obj_set_style_text_font(wifiLabel, &lv_font_montserrat_16, 0);
@@ -533,6 +761,7 @@ void loop() {
     askRequested = false;
     askAndRecord();
   }
+  if (replyReady) handleReply();
   updateSendScreen();
   updateWifiScreen();
 
