@@ -15,6 +15,7 @@ import type * as http from "../http.js";
 import type * as incidents from "../incidents.js";
 import type * as notify from "../notify.js";
 import type * as seed from "../seed.js";
+import type * as talk from "../talk.js";
 
 import type {
   ApiFromModules,
@@ -30,6 +31,7 @@ declare const fullApi: ApiFromModules<{
   incidents: typeof incidents;
   notify: typeof notify;
   seed: typeof seed;
+  talk: typeof talk;
 }>;
 
 /**

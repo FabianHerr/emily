@@ -159,7 +159,51 @@ const ack = httpAction(async (ctx, req) => {
   }
 });
 
+// GET /poll?device=watch-1: the watch asks "anything for me to say?".
+// 200 { text, askAgain, audioUrl? } for the oldest waiting message (audioUrl is left out
+// when the voice failed: show the text). 200 {} when there is nothing. 404 unknown device.
+// Each message is handed out once. Also counts as a heartbeat.
+const poll = httpAction(async (ctx, req) => {
+  const url = new URL(req.url);
+  const deviceId = (url.searchParams.get("device") ?? "").trim();
+  if (!deviceId) return json(400, { error: "'device' is required" });
+  const result = await ctx.runMutation(internal.talk.poll, { deviceId });
+  if (!result.known) return json(404, { error: "Unknown device" });
+  if (!result.message) return json(200, {});
+  const { text, askAgain, audioId } = result.message;
+  const base = process.env.CONVEX_SITE_URL ?? url.origin;
+  return json(200, {
+    text,
+    askAgain,
+    ...(audioId !== null && { audioUrl: `${base}${AUDIO_PATH_PREFIX}${audioId}` }),
+  });
+});
+
+// GET /audio/<id>: the WAV for a message (the full URL comes from /poll). 404 if unknown.
+const AUDIO_PATH_PREFIX = "/audio/";
+const audio = httpAction(async (ctx, req) => {
+  const id = new URL(req.url).pathname.slice(AUDIO_PATH_PREFIX.length);
+  let blob: Blob | null = null;
+  try {
+    // A malformed id throws: same answer as an unknown one.
+    if (id) blob = await ctx.storage.get(id as Id<"_storage">);
+  } catch {
+    blob = null;
+  }
+  if (!blob) return json(404, { error: "Unknown audio" });
+  const bytes = await blob.arrayBuffer();
+  return new Response(bytes, {
+    status: 200,
+    headers: {
+      "Content-Type": AUDIO_CONTENT_TYPE,
+      "Content-Length": String(bytes.byteLength),
+    },
+  });
+});
+
 const http = httpRouter();
+http.route({ path: "/poll", method: "GET", handler: poll });
+http.route({ pathPrefix: AUDIO_PATH_PREFIX, method: "GET", handler: audio });
 http.route({ path: "/fall", method: "POST", handler: fall });
 http.route({ path: "/ack", method: "POST", handler: ack });
 export default http;

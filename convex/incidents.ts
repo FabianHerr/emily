@@ -301,28 +301,6 @@ export const saveDecision = internalMutation({
   },
 });
 
-// Queues what Emily says next, for the watch to pick up (GET /poll, CJ-14).
-// Audio is added by a later task.
-export const queueWatchMessage = internalMutation({
-  args: {
-    deviceId: v.string(),
-    incidentId: v.id("incidents"),
-    text: v.string(),
-    askAgain: v.boolean(),
-  },
-  returns: v.null(),
-  handler: async (ctx, args) => {
-    await ctx.db.insert("messages", {
-      deviceId: args.deviceId,
-      incidentId: args.incidentId,
-      text: args.text,
-      askAgain: args.askAgain,
-      delivered: false,
-    });
-    return null;
-  },
-});
-
 // Called by POST /ack when a family member acknowledges an emergency in Pushover.
 // Idempotent: Pushover may call the callback more than once.
 export const acknowledge = internalMutation({
@@ -352,13 +330,12 @@ export const acknowledge = internalMutation({
       status: "acknowledged",
       acknowledgedBy: name,
     });
-    // For the watch to say (GET /poll, CJ-14). Audio is added by a later task.
-    await ctx.db.insert("messages", {
+    // For the watch to say (Talk to Loved One adds the audio; GET /poll delivers it).
+    await ctx.scheduler.runAfter(0, internal.talk.say, {
       deviceId: incident.deviceId,
       incidentId: incident._id,
       text: `${name} is on the way`,
       askAgain: false,
-      delivered: false,
     });
     // Stop the alerts still repeating on the other family members' phones.
     await ctx.scheduler.runAfter(0, internal.notify.cancelReceipts, {

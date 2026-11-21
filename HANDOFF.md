@@ -140,8 +140,8 @@ AI Service llama a Notify Family y a Talk to Loved One **en paralelo**: el aviso
 | Ruta | Quién llama | Envía | Recibe |
 |---|---|---|---|
 | `POST /fall` | Reloj | Datos en la URL + WAV crudo en el cuerpo (puede ir vacío) | `{ "incidentId": "abc" }` (detalle abajo) |
-| `GET /poll` | Reloj | Su identificador | `{ "audioUrl": "...", "text": "...", "askAgain": false }` o vacío |
-| `GET /audio/:id` | Reloj | — | El audio de la respuesta |
+| `GET /poll` | Reloj | `?device=watch-1` | `{ "audioUrl": "...", "text": "...", "askAgain": false }` o `{}` (detalle abajo) |
+| `GET /audio/<id>` | Reloj | — | El WAV de la respuesta (la URL completa viene en `/poll`) |
 | `POST /heartbeat` | Reloj | `{ "battery": 72 }` | OK |
 | `POST /ack` | Pushover | Recibo confirmado | OK |
 
@@ -156,6 +156,17 @@ AI Service llama a Notify Family y a Talk to Loved One **en paralelo**: el aviso
   - `404` → `{ "error": "Unknown device" }` o `{ "error": "Unknown incident" }`
 - Ronda 2: agregar `&incidentId=<el de la ronda 1>`. Actualiza ESE incidente (`round` pasa a 2, se suma el audio, no cambia `status`).
   Si falta `incidentId`, se crea un incidente nuevo (por si el reloj perdió la respuesta de la ronda 1).
+
+**Contrato exacto de GET /poll y GET /audio (implementado en CJ-14, 21 nov):**
+- `GET /poll?device=watch-1` responde siempre JSON:
+  - `200` → `{ "text": "Stay calm Rosa, I've told Fabian.", "askAgain": false, "audioUrl": "https://healthy-lark-748.convex.site/audio/kg2..." }`: el mensaje más antiguo en espera.
+  - `200` → el mismo objeto **sin `audioUrl`** si la voz falló: mostrar `text` en pantalla y vibrar.
+  - `200` → `{}` si no hay nada. `404` → `{ "error": "Unknown device" }`. `400` si falta `device`.
+  - `text` puede venir vacío (`""`) con `askAgain: true`: el reloj repite su propia pregunta y graba la ronda 2.
+  - Cada mensaje se entrega **una sola vez**: si el reloj pierde la respuesta, ese mensaje no vuelve. Puede haber varios en cola: seguir llamando hasta recibir `{}`.
+  - Cada `/poll` cuenta como latido (`devices.lastHeartbeat`).
+- `GET <audioUrl>` (no armar la URL a mano): `200` con `Content-Type: audio/wav` y `Content-Length`; WAV 16 kHz, mono, 16 bits. `404` → `{ "error": "Unknown audio" }`.
+- El audio tarda ~1 s en estar listo después de la decisión; el aviso a la familia no lo espera.
 
 ## 7. Flujo de una caída: dos rondas, sin apresurarse
 
@@ -349,7 +360,7 @@ Cosas que ya sabemos y que es fácil pasar por alto. Cada una dice en qué tarea
 | Voz de Emily, misma frase, WAV 16 kHz, en caliente | `eleven_v4_turbo` (el elegido): 0.87–1.07 s · `eleven_v4`: 1.36–1.53 s · `eleven_flash_v2_5`: 0.36–0.49 s, y **3.2 s la primera vez (en frío)** | 21 nov, dentro de Convex | límite 5 s |
 | Cadena del servidor: voz a texto → Claude → voz de Emily | **2.3–2.5 s en caliente, 6.9 s en frío** (3 veces, sin alertas) | 21 nov | — |
 
-Ojo: la primera llamada en frío es mucho más lenta (v4 turbo en frío no está medido). Antes del demo, hacer una caída de prueba para "calentar". Falta medir lo que pasa en el reloj: subir el WAV, esperar el `/poll` (CJ-14) y reproducir. La voz todavía no está conectada a `processFall`: eso es CJ-14.
+Ojo: la primera llamada en frío es mucho más lenta (v4 turbo en frío no está medido). Antes del demo, hacer una caída de prueba para "calentar". Falta medir lo que pasa en el reloj: subir el WAV, esperar el `/poll` y reproducir. Desde CJ-14 la voz ya sale por `/poll` (`convex/talk.ts`); en la prueba real el texto a voz tardó 0.9 s.
 
 Falta medir: desde la caída real del reloj (CJ-9), y los pasos de voz e IA (CJ-18).
 

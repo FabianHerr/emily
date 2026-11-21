@@ -283,8 +283,9 @@ export const processFall = internalAction({
         handoffs.push(alert(decision.level, decision.family_summary));
       }
       if (decision.reply_to_person || decision.ask_again) {
+        // Scheduled, not awaited: Talk to Loved One makes the audio on its own time.
         handoffs.push(
-          ctx.runMutation(internal.incidents.queueWatchMessage, {
+          ctx.scheduler.runAfter(0, internal.talk.say, {
             deviceId: fall.deviceId,
             incidentId,
             text: decision.reply_to_person ?? "",
