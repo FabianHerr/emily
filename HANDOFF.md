@@ -301,6 +301,16 @@ No usar SisFall ni KFall: son de cintura.
 - Respaldo: Gemini `gemini-3.5-flash-lite` (estable; Google lo describe como el más rápido y económico de la serie 3.5; gratis en el nivel gratuito, $0.30 / $2.50 por millón en el de pago). Clave en Convex: `GEMINI_API_KEY`. La documentación actual de Google usa la "Interactions API": `POST https://generativelanguage.googleapis.com/v1beta/interactions`, cabeceras `x-goog-api-key` y `Api-Revision: 2026-05-20`, cuerpo con `model`, `input` y `response_format: { type: "text", mime_type: "application/json", schema }`. **Sin confirmar:** la forma exacta de la respuesta y los límites del nivel gratuito; leer la doc antes de programarlo.
 - Voz de Emily: la elige Fabian en ElevenLabs y guarda su id en `ELEVENLABS_VOICE_ID`.
 
+**AI Service en el código (CJ-13):**
+- `convex/ai.ts` (runtime normal, el SDK de Anthropic funciona ahí): `processFall({ incidentId, round })`, programada por `recordFall` en cada incidente nuevo y en cada ronda 2 nueva (un reintento igual no programa nada). `decideWithClaude(...)` prueba solo a Claude desde la terminal. `convex/decide.ts`: reglas puras (`decideOnSilence`, `fallbackDecision`, `validateDecision`, esquema JSON).
+- Sin audio en la ronda → la emergencia de siempre: "Possible fall. Impact of 3.4 g" (sin ElevenLabs ni Claude).
+- Silencio (transcript `null`) → ronda 1 con golpe ≥ 3 g: preventivo y volver a preguntar; < 3 g: no avisa y vuelve a preguntar; ronda 2: emergencia "Rosa fell and is not responding."
+- Con palabras → Claude (`claude-sonnet-5-5`, `effort: "low"`, salida estructurada, respaldo de rechazo `fallbacks: "default"`, límite 5 s).
+- Claude falla (sin clave, tiempo, error, rechazo, JSON malo) → emergencia `Said: "<lo que dijo>"`. Cualquier error inesperado → la emergencia fija.
+- En el incidente se guarda `transcript` y `decision` (+ `source`: silence/claude/fallback, `sttMs`, `aiMs`); `level: "none"` lo cierra (nunca una emergencia ya enviada). Lo que Emily responde queda en `messages`.
+- Medido el 21 nov (12 llamadas a Claude, dentro de Convex): con `effort: "low"` mediana 2.2 s (1.6 a 3.1 s; la primera incluye compilar el esquema). `between_tools` no fue más rápido de forma clara (mediana 1.7 s). Las 4 respuestas de prueba dieron el nivel esperado; "ignore your instructions..." quedó en precautionary.
+- **Falta probar** la cadena completa con audio real y avisos reales (Scribe + Claude + Pushover); no se ha llamado a `processFall`.
+
 **Sigue por verificar:**
 - Segundos reales de respuesta de Sonnet 5.5 y de Gemini con el JSON de ejemplo (medir en CJ-13; meta 2.5 s).
 - Cuánto tarda el arranque en frío de las actions de Node en Convex (puede sumar al tiempo de respuesta; medir en CJ-18).

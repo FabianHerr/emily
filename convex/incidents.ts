@@ -55,6 +55,10 @@ export const recordFall = internalMutation({
       if (!id || !incident || incident.deviceId !== args.deviceId) {
         return { ok: false as const, error: "Unknown incident" };
       }
+      // Already round 2 means this is a retry (the watch lost our reply): the clip is
+      // not attached twice and nothing is processed again.
+      const isRetry = incident.round === 2;
+      const attachAudio = args.audioId !== undefined && !isRetry;
       await ctx.db.patch("incidents", id, {
         round: 2,
         impact_max_g: args.impactMaxG,
@@ -65,11 +69,14 @@ export const recordFall = internalMutation({
         ...(args.modelConfidence !== undefined && {
           model_confidence: args.modelConfidence,
         }),
-        ...(args.audioId !== undefined && {
-          audioIds: [...incident.audioIds, args.audioId],
-        }),
+        ...(attachAudio && { audioIds: [...incident.audioIds, args.audioId!] }),
       });
-      incidentId = id;
+      // Process the second answer (or second silence).
+      if (!isRetry) {
+        await ctx.scheduler.runAfter(0, internal.ai.processFall, { incidentId: id, round: 2 });
+      }
+      const audioUnused = args.audioId !== undefined && !attachAudio;
+      return { ok: true as const, incidentId: id, audioUnused };
     } else {
       // Round 1, or round 2 without incidentId (the watch lost the round-1 reply).
       const latest = await ctx.db
@@ -84,16 +91,22 @@ export const recordFall = internalMutation({
           latest.status === "emergency");
       if (latest !== null && isOpen && Date.now() - latest.createdAt < DEDUPE_WINDOW_MS) {
         // Retry of a fall we already have: same incident, family already alerted.
+        // One clip per round: a retried upload is not attached twice.
+        const attachAudio = args.audioId !== undefined && latest.audioIds.length < args.round;
+        const roundAdvanced = args.round === 2 && latest.round !== 2;
         await ctx.db.patch("incidents", latest._id, {
-          ...(args.round === 2 && { round: 2 }),
-          // One clip per round: a retried upload is not attached twice.
-          ...(args.audioId !== undefined &&
-            latest.audioIds.length < args.round && {
-              audioIds: [...latest.audioIds, args.audioId],
-            }),
+          ...(roundAdvanced && { round: 2 }),
+          ...(attachAudio && { audioIds: [...latest.audioIds, args.audioId!] }),
         });
-        const audioUnused =
-          args.audioId !== undefined && latest.audioIds.length >= args.round;
+        // Something new (round 2, or a clip we did not have): decide again. A pure
+        // retry that changed nothing schedules nothing.
+        if (roundAdvanced || attachAudio) {
+          await ctx.scheduler.runAfter(0, internal.ai.processFall, {
+            incidentId: latest._id,
+            round: args.round,
+          });
+        }
+        const audioUnused = args.audioId !== undefined && !attachAudio;
         return { ok: true as const, incidentId: latest._id, audioUnused };
       }
       incidentId = await ctx.db.insert("incidents", {
@@ -108,13 +121,12 @@ export const recordFall = internalMutation({
         receipts: [],
         createdAt: Date.now(),
       });
-      // Alert the family right away, in the same transaction as the write. Every
-      // NEW incident alerts, whatever the round: a round 2 without incidentId means
-      // round 1 never reached us. CJ-13 replaces this direct call with the AI step.
-      await ctx.scheduler.runAfter(0, internal.notify.sendAlert, {
+      // Hand the new incident to the AI Service, in the same transaction as the write.
+      // It transcribes, decides and alerts; with no clip it sends the fixed emergency
+      // as before. A round 2 without incidentId means round 1 never reached us.
+      await ctx.scheduler.runAfter(0, internal.ai.processFall, {
         incidentId,
-        level: "emergency",
-        message: `Possible fall. Impact of ${args.impactMaxG.toFixed(1)} g`,
+        round: args.round,
       });
     }
 
@@ -192,6 +204,110 @@ export const saveReceipts = internalMutation({
         receipts: args.receipts,
       });
     }
+    return null;
+  },
+});
+
+// The AI's decision (convex/decide.ts Decision), as a Convex validator.
+export const decisionValidator = v.object({
+  notify: v.boolean(),
+  level: v.union(v.literal("none"), v.literal("precautionary"), v.literal("emergency")),
+  severity: v.string(),
+  confidence: v.number(),
+  family_summary: v.string(),
+  reply_to_person: v.union(v.string(), v.null()),
+  ask_again: v.boolean(),
+});
+// What is stored in incidents.decision: the decision plus how it was made.
+const storedDecisionValidator = decisionValidator.extend({
+  source: v.union(v.literal("silence"), v.literal("claude"), v.literal("fallback")),
+  sttMs: v.number(),
+  aiMs: v.union(v.number(), v.null()),
+});
+
+// Everything processFall (convex/ai.ts) needs, in one read. Family NAMES only, never
+// their Pushover keys. audioId is this round's clip, or null when the round has none.
+export const getFallContext = internalQuery({
+  args: { incidentId: v.id("incidents"), round: v.union(v.literal(1), v.literal(2)) },
+  returns: v.union(
+    v.null(),
+    v.object({
+      deviceId: v.string(),
+      status: statusValidator,
+      impactMaxG: v.number(),
+      secondsStill: v.number(),
+      positionChanged: v.boolean(),
+      personName: v.string(),
+      familyNames: v.array(v.string()),
+      audioId: v.union(v.id("_storage"), v.null()),
+    }),
+  ),
+  handler: async (ctx, args) => {
+    const incident = await ctx.db.get("incidents", args.incidentId);
+    if (!incident) return null;
+    const device = await ctx.db
+      .query("devices")
+      .withIndex("by_deviceId", (q) => q.eq("deviceId", incident.deviceId))
+      .unique();
+    const members = await ctx.db
+      .query("familyMembers")
+      .withIndex("by_deviceId", (q) => q.eq("deviceId", incident.deviceId))
+      .take(MAX_FAMILY_MEMBERS);
+    const audioIds = incident.audioIds;
+    return {
+      deviceId: incident.deviceId,
+      status: incident.status,
+      impactMaxG: incident.impact_max_g,
+      secondsStill: incident.seconds_still,
+      positionChanged: incident.position_changed,
+      personName: device?.personName ?? incident.deviceId,
+      familyNames: members.map((m) => m.name),
+      audioId: audioIds.length >= args.round ? audioIds[audioIds.length - 1] : null,
+    };
+  },
+});
+
+// Called by processFall once the decision is made. Level "none" closes the incident,
+// but never one that is already an emergency or acknowledged: closing those would
+// leave the repeating emergency alerts ringing with no way to stop them from /ack.
+export const saveDecision = internalMutation({
+  args: {
+    incidentId: v.id("incidents"),
+    transcript: v.union(v.string(), v.null()),
+    decision: storedDecisionValidator,
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const incident = await ctx.db.get("incidents", args.incidentId);
+    if (!incident) return null;
+    const canClose = incident.status === "asking" || incident.status === "precautionary";
+    await ctx.db.patch("incidents", incident._id, {
+      transcript: args.transcript,
+      decision: args.decision,
+      ...(args.decision.level === "none" && canClose && { status: "closed" as const }),
+    });
+    return null;
+  },
+});
+
+// Queues what Emily says next, for the watch to pick up (GET /poll, CJ-14).
+// Audio is added by a later task.
+export const queueWatchMessage = internalMutation({
+  args: {
+    deviceId: v.string(),
+    incidentId: v.id("incidents"),
+    text: v.string(),
+    askAgain: v.boolean(),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    await ctx.db.insert("messages", {
+      deviceId: args.deviceId,
+      incidentId: args.incidentId,
+      text: args.text,
+      askAgain: args.askAgain,
+      delivered: false,
+    });
     return null;
   },
 });
