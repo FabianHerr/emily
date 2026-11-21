@@ -152,17 +152,22 @@ export const recordFall = internalMutation({
   },
 });
 
-// Scheduled by recordFall for every new incident. Alerts only if the incident is
-// still "asking" AND no decision was ever saved. A silent round 1 with a weak impact
-// saves a decision (level none, ask_again) and stays "asking": that is not a failure.
+// Scheduled by recordFall for every new incident. Alerts if, 30 s later, the incident
+// is still "asking" and either no decision was ever saved (processFall died) or round 1
+// asked again and round 2 never came (the watch lost WiFi or crashed). Round 2 normally
+// arrives about 15 s after round 1.
 export const lastDefence = internalMutation({
   args: { incidentId: v.id("incidents") },
   returns: v.null(),
   handler: async (ctx, args) => {
     const incident = await ctx.db.get("incidents", args.incidentId);
-    if (!incident) return null;
-    if (incident.status !== "asking" || incident.decision !== undefined) return null;
-    console.error(`lastDefence: no decision for ${incident._id} after ${LAST_DEFENCE_MS} ms, alerting`);
+    if (!incident || incident.status !== "asking") return null;
+    const noDecision = incident.decision === undefined;
+    const roundTwoMissing = incident.round === 1 && incident.decision?.ask_again === true;
+    if (!noDecision && !roundTwoMissing) return null;
+    console.error(
+      `lastDefence: ${noDecision ? "no decision" : "no round 2"} for ${incident._id} after ${LAST_DEFENCE_MS} ms, alerting`,
+    );
     await ctx.scheduler.runAfter(0, internal.notify.sendAlert, {
       incidentId: incident._id,
       level: "precautionary",
@@ -327,12 +332,13 @@ export const saveDecision = internalMutation({
     transcript: v.union(v.string(), v.null()),
     decision: storedDecisionValidator,
   },
-  returns: v.null(),
+  // False when a newer round already arrived: the caller must not speak this stale reply.
+  returns: v.boolean(),
   handler: async (ctx, args) => {
     const incident = await ctx.db.get("incidents", args.incidentId);
-    if (!incident) return null;
+    if (!incident) return false;
     // A late round 1 must not overwrite round 2's decision either.
-    if (incident.round > args.round) return null;
+    if (incident.round > args.round) return false;
     const isFinalNone = args.decision.level === "none" && !args.decision.ask_again;
     const canClose = incident.status === "asking" || incident.status === "precautionary";
     const closes = isFinalNone && canClose;
@@ -368,7 +374,7 @@ export const saveDecision = internalMutation({
         level: "info",
       });
     }
-    return null;
+    return true;
   },
 });
 

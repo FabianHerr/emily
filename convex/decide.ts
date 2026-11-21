@@ -21,11 +21,26 @@ const EMERGENCY_WORDS = [
   "pain",
   "painful",
   "can't",
+  "cant",
   "cannot",
+  "can not",
   "fell",
   "ambulance",
+  "broke",
+  "broken",
+  "bleeding",
+  "blood",
+  "dizzy",
+  "stuck",
+  "emergency",
+  "hospital",
+  "doctor",
 ];
 const OK_PHRASES = ["i'm ok", "i'm okay", "i'm fine", "i am fine", "all good"];
+// An OK phrase only counts in a short, plain answer: "it's not all good" or
+// "I'm okay but ..." must not close the incident.
+const OK_BLOCKERS = ["not", "no", "but", "don't", "except", "just"];
+const OK_MAX_WORDS = 8;
 // What Emily says back after a rules decision (no family names: rules do not know them).
 const RULES_EMERGENCY_REPLY = "I am getting help for you.";
 const RULES_PRECAUTIONARY_REPLY = "I am letting your family know, just in case.";
@@ -159,7 +174,11 @@ export function fallbackDecision(args: {
   if (EMERGENCY_WORDS.some((w) => containsPhrase(text, w))) {
     return { ...base, notify: true, level: "emergency", reply_to_person: RULES_EMERGENCY_REPLY };
   }
-  if (OK_PHRASES.some((p) => containsPhrase(text, p))) {
+  const isPlainOk =
+    OK_PHRASES.some((p) => containsPhrase(text, p)) &&
+    !OK_BLOCKERS.some((w) => containsPhrase(text, w)) &&
+    text.split(/\s+/).filter((w) => w.length > 0).length <= OK_MAX_WORDS;
+  if (isPlainOk) {
     return { ...base, notify: false, level: "none", reply_to_person: RULES_OK_REPLY };
   }
   // Unclear answer: the impact decides how loud the alert is.

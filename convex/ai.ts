@@ -400,7 +400,7 @@ export const processFall = internalAction({
       // There is no round 3: the watch must not ask a third time.
       if (round === 2) decision = { ...decision, ask_again: false };
 
-      await ctx.runMutation(internal.incidents.saveDecision, {
+      const applied: boolean = await ctx.runMutation(internal.incidents.saveDecision, {
         incidentId,
         round,
         transcript: stt.transcript,
@@ -415,7 +415,8 @@ export const processFall = internalAction({
       if (decision.notify && decision.level !== "none") {
         handoffs.push(alert(decision.level, decision.family_summary));
       }
-      if (decision.reply_to_person || decision.ask_again) {
+      // A late round 1 (round 2 already arrived) must not speak or ask again on the watch.
+      if (applied && (decision.reply_to_person || decision.ask_again)) {
         // Scheduled, not awaited: Talk to Loved One makes the audio on its own time.
         handoffs.push(
           ctx.scheduler.runAfter(0, internal.talk.say, {
