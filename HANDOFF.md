@@ -139,11 +139,23 @@ AI Service llama a Notify Family y a Talk to Loved One **en paralelo**: el aviso
 
 | Ruta | Quién llama | Envía | Recibe |
 |---|---|---|---|
-| `POST /fall` | Reloj | Audio 5 s + datos + ronda | `{ "incidentId": "abc" }` |
+| `POST /fall` | Reloj | Datos en la URL + WAV crudo en el cuerpo (puede ir vacío) | `{ "incidentId": "abc" }` (detalle abajo) |
 | `GET /poll` | Reloj | Su identificador | `{ "audioUrl": "...", "text": "...", "askAgain": false }` o vacío |
 | `GET /audio/:id` | Reloj | — | El audio de la respuesta |
 | `POST /heartbeat` | Reloj | `{ "battery": 72 }` | OK |
 | `POST /ack` | Pushover | Recibo confirmado | OK |
+
+**Contrato exacto de POST /fall (implementado en CJ-6):**
+- URL: `/fall?device=watch-1&round=1&impact=3.4&still=8&position=1&confidence=0.91`
+  - `device` (obligatorio, debe existir en `devices`) · `round` (obligatorio, `1` o `2`) · `impact` (obligatorio, g)
+  - `still` (segundos, por defecto `0`) · `position` (`0` o `1`, por defecto `0`) · `confidence` (0 a 1, por defecto `1`)
+- Cuerpo: los bytes del WAV tal cual, con `Content-Type: audio/wav`. Puede ir vacío. Máximo 2 MB (5 s pesan ~160 KB).
+- Respuestas (siempre JSON):
+  - `200` → `{ "incidentId": "jd7..." }`
+  - `400` → `{ "error": "'round' must be 1 or 2" }` (falta un dato, no es número, fuera de rango o audio > 2 MB)
+  - `404` → `{ "error": "Unknown device" }` o `{ "error": "Unknown incident" }`
+- Ronda 2: agregar `&incidentId=<el de la ronda 1>`. Actualiza ESE incidente (`round` pasa a 2, se suma el audio, no cambia `status`).
+  Si falta `incidentId`, se crea un incidente nuevo (por si el reloj perdió la respuesta de la ronda 1).
 
 ## 7. Flujo de una caída: dos rondas, sin apresurarse
 
