@@ -1,10 +1,15 @@
 // Emily watch firmware (LilyGO T-Watch S3).
 // CJ-4: read the BMA423 accelerometer at 50 Hz and keep the last 3 s in a ring buffer.
 // CJ-5: detect a fall with thresholds, vibrate and show the values on screen.
+// CJ-8: connect to the phone hotspot and POST the fall to Convex (HANDOFF section 6).
 
 #include <LilyGoLib.h>
 #include <LV_Helper.h>
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <HTTPClient.h>
 #include <math.h>
+#include "secrets.h"
 
 // ---- Tunable constants ----
 const uint32_t SERIAL_BAUD = 115200;
@@ -31,6 +36,14 @@ const uint32_t COOLDOWN_MS = 30000;           // no new trigger for 30 s after a
 const float SIMULATED_IMPACT_G = 3.4f;        // "Simulate fall" button
 const uint8_t VIBRATION_EFFECT = 47;          // DRV2605 effect 47 = "Buzz 1, 100%"
 const uint8_t VIBRATION_REPEATS = 3;
+
+// Sending the fall (CJ-8).
+const uint32_t WIFI_CONNECT_TIMEOUT_MS = 15000;
+const uint32_t HTTP_TIMEOUT_MS = 8000;
+const uint32_t SEND_RETRY_MS = 5000;
+const int SEND_MAX_RETRIES = 6;               // after the first attempt
+const float MODEL_CONFIDENCE = 1.0f;          // no model yet (CJ-22)
+const uint32_t SCREEN_WIFI_REFRESH_MS = 1000;
 
 struct AccelSample {
   uint32_t tMs;
@@ -68,9 +81,20 @@ uint32_t cooldownUntilMs = 0;
 FallEvent lastFall;
 bool hasFall = false;
 
+// Sending runs in its own task so the accelerometer keeps reading at 50 Hz.
+// The task only talks to the network; screen and vibration stay in loop().
+enum class SendStatus { Idle, Sending, Sent, Retrying, Failed };
+volatile SendStatus sendStatus = SendStatus::Idle;
+volatile bool sendRequested = false;
+FallEvent fallToSend;
+String incidentId;             // from the last POST /fall answer
+SendStatus shownSendStatus = SendStatus::Idle;
+
 // Screen.
 lv_obj_t *statusLabel;
 lv_obj_t *valuesLabel;
+lv_obj_t *wifiLabel;
+uint32_t nextWifiRefreshMs = 0;
 
 void addSample(const AccelSample &s) {
   history[historyHead] = s;
@@ -126,6 +150,97 @@ void onFall(const FallEvent &f) {
   showFall(f);
   Serial.printf("FALL impact_max_g=%.2f seconds_still=%d position_changed=%d free_fall=%d\n",
                 f.impactMaxG, f.secondsStill, f.positionChanged, f.freeFall);
+  // Detect -> vibrate -> send.
+  fallToSend = f;
+  sendRequested = true;
+}
+
+// One POST /fall. Returns true and fills incidentId on HTTP 200.
+bool postFall(const FallEvent &f) {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("SEND no WiFi");
+    return false;
+  }
+  String url = String(CONVEX_SITE_URL) + "/fall?device=" + DEVICE_ID + "&round=1" +
+               "&impact=" + String(f.impactMaxG, 2) + "&still=" + String(f.secondsStill) +
+               "&position=" + (f.positionChanged ? "1" : "0") +
+               "&confidence=" + String(MODEL_CONFIDENCE, 2);
+
+  WiFiClientSecure client;
+  client.setInsecure();  // demo only (HANDOFF section 10)
+  HTTPClient http;
+  http.setConnectTimeout(HTTP_TIMEOUT_MS);
+  http.setTimeout(HTTP_TIMEOUT_MS);
+  if (!http.begin(client, url)) {
+    Serial.println("SEND begin failed");
+    return false;
+  }
+  uint32_t t0 = millis();
+  int code = http.POST((uint8_t *)nullptr, 0);  // empty body until CJ-11 adds the audio
+  String body = code > 0 ? http.getString() : http.errorToString(code);
+  http.end();
+  Serial.printf("SEND http=%d in %lu ms body=%s\n", code, (unsigned long)(millis() - t0), body.c_str());
+  if (code != 200) return false;
+
+  // Body is {"incidentId":"..."}; a tiny search is enough, no JSON library needed.
+  int key = body.indexOf("\"incidentId\"");
+  int start = key < 0 ? -1 : body.indexOf('"', body.indexOf(':', key) + 1);
+  int end = start < 0 ? -1 : body.indexOf('"', start + 1);
+  if (end < 0) return false;
+  incidentId = body.substring(start + 1, end);
+  Serial.printf("INCIDENT %s\n", incidentId.c_str());
+  return true;
+}
+
+void sendTask(void *) {
+  for (;;) {
+    if (!sendRequested) {
+      vTaskDelay(pdMS_TO_TICKS(50));
+      continue;
+    }
+    sendRequested = false;
+    FallEvent f = fallToSend;
+    sendStatus = SendStatus::Sending;
+    bool ok = postFall(f);
+    for (int retry = 1; !ok && retry <= SEND_MAX_RETRIES && !sendRequested; retry++) {
+      sendStatus = SendStatus::Retrying;
+      Serial.printf("SEND retry %d/%d in %lu ms\n", retry, SEND_MAX_RETRIES, (unsigned long)SEND_RETRY_MS);
+      vTaskDelay(pdMS_TO_TICKS(SEND_RETRY_MS));
+      ok = postFall(f);
+    }
+    sendStatus = ok ? SendStatus::Sent : SendStatus::Failed;
+  }
+}
+
+// Called from loop(): screen and vibration follow the send task.
+void updateSendScreen() {
+  SendStatus s = sendStatus;
+  if (s == shownSendStatus) return;
+  bool firstFailure = s == SendStatus::Retrying && shownSendStatus == SendStatus::Sending;
+  shownSendStatus = s;
+  if (s == SendStatus::Sending) lv_label_set_text(statusLabel, "Sending...");
+  if (s == SendStatus::Sent) lv_label_set_text(statusLabel, "Help notified");
+  if (s == SendStatus::Retrying || s == SendStatus::Failed) lv_label_set_text(statusLabel, "No connection");
+  if (firstFailure) vibrate();  // 3 buzzes when the first attempt fails
+}
+
+void updateWifiScreen() {
+  if ((int32_t)(millis() - nextWifiRefreshMs) < 0) return;
+  nextWifiRefreshMs = millis() + SCREEN_WIFI_REFRESH_MS;
+  lv_label_set_text(wifiLabel, WiFi.status() == WL_CONNECTED ? "WiFi OK" : "No WiFi");
+}
+
+void connectWifi() {
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);  // reconnect on its own only if the link drops
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  uint32_t t0 = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - t0 < WIFI_CONNECT_TIMEOUT_MS) delay(100);
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.printf("WIFI OK ip=%s in %lu ms\n", WiFi.localIP().toString().c_str(), (unsigned long)(millis() - t0));
+  } else {
+    Serial.println("WIFI not connected (will keep trying in the background)");
+  }
 }
 
 void startWatching(const AccelSample &trigger) {
@@ -219,6 +334,11 @@ void setupScreen() {
   lv_label_set_text(valuesLabel, "");
   lv_obj_align(valuesLabel, LV_ALIGN_TOP_LEFT, 12, 55);
 
+  wifiLabel = lv_label_create(lv_screen_active());
+  lv_obj_set_style_text_font(wifiLabel, &lv_font_montserrat_16, 0);
+  lv_label_set_text(wifiLabel, "No WiFi");
+  lv_obj_align(wifiLabel, LV_ALIGN_BOTTOM_MID, 0, -66);
+
   lv_obj_t *btn = lv_button_create(lv_screen_active());
   lv_obj_set_size(btn, 200, 50);
   lv_obj_align(btn, LV_ALIGN_BOTTOM_MID, 0, -10);
@@ -248,6 +368,9 @@ void setup() {
   }
 
   setupScreen();
+  lv_timer_handler();  // draw the screen before the (up to 15 s) WiFi wait
+  connectWifi();
+  xTaskCreatePinnedToCore(sendTask, "sendFall", 8192, nullptr, 1, nullptr, 0);
 
   if (PRINT_RAW_SAMPLES) Serial.println("t_ms,x,y,z,mag");
   Serial.println("READY");
@@ -257,6 +380,8 @@ void setup() {
 void loop() {
   instance.loop();
   lv_timer_handler();
+  updateSendScreen();
+  updateWifiScreen();
 
   uint32_t now = millis();
   if ((int32_t)(now - nextSampleMs) < 0) return;
