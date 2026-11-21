@@ -349,7 +349,20 @@ Si el tiempo se acaba: con CJ-1 a CJ-18 ya hay demo. En el pitch: "la versión 2
 
 **Fuera del MVP:** respuestas pregrabadas, WebSocket/MQTT, LoRa, optimización de batería, aviso al familiar más cercano, privacidad granular.
 
-## 14. Para el otro chat de Claude
+## 14. Para empezar (Sebastian)
+
+```
+git clone https://github.com/FabianHerr/emily.git
+cd emily
+npm install
+```
+
+- **No correr `npx convex dev`.** Solo Fabian lo corre. Con otra cuenta se crea otro backend con otra URL.
+- Copiar `watch/secrets.example.h` a `watch/secrets.h` y llenar: el hotspot del celular y `CONVEX_SITE_URL = https://healthy-lark-748.convex.site`.
+- Abrir Claude Code dentro de la carpeta `emily`: lee `CLAUDE.md` solo, y ese archivo lo manda a este.
+- Primera tarea: CJ-2 en el tablero (incluye cómo conectar el reloj usado de forma segura).
+
+## 15. Para el otro chat de Claude
 
 - Responde en **español**, **simple, corto y con ejemplos**. Fabian rechaza respuestas largas.
 - **Sin sobreingeniería.** Si hay dos caminos, el más simple que funcione para la demo.
@@ -357,5 +370,5 @@ Si el tiempo se acaba: con CJ-1 a CJ-18 ya hay demo. En el pitch: "la versión 2
 - La IA redacta y clasifica; **avisar a la familia nunca puede depender de que una API responda** (secciones 7 y 8).
 - No des por hecho lo "sin confirmar" de la sección 3 ni lo de la sección 12: pregunta o verifica.
 - Al terminar o empezar una tarea, actualiza su estado en el tablero de la sección 13 (Sebastian necesita permiso de edición sobre el artefacto).
-- Docs del proyecto "Hackaton CodeJam": `claude/handoff.md` (este), `claude/arquitectura-especificaciones.md`, `claude/mvp-requisitos.md`.
+- Este archivo vive en la raíz del repo `FabianHerr/emily` y `CLAUDE.md` manda a leerlo primero. Es la única copia que se mantiene; las copias viejas (Descargas, proyecto "Hackaton CodeJam") están desactualizadas.
 - Versión con diagramas: https://claude.ai/artifact/QF5kJyZunwwBZyudSD2Jz4
