@@ -92,6 +92,17 @@
   transform-origin: center;
 }
 
+/* Eyes (and, a little less, brows) lean toward the pointer. */
+.emily-look {
+  transform: translate(calc(var(--look-x, 0) * 1px), calc(var(--look-y, 0) * 1px));
+  transition: transform 180ms var(--ease-out);
+}
+
+.emily-brows {
+  transform: translate(calc(var(--look-x, 0) * 0.45px), calc(var(--look-y, 0) * 0.45px));
+  transition: transform 260ms var(--ease-out);
+}
+
 .emily-brows path,
 .emily-smile {
   transition: transform 500ms var(--ease-out), opacity 300ms ease-out;
@@ -247,6 +258,10 @@
   font-weight: 700;
 }
 
+.history-summary {
+  color: var(--ink-soft);
+}
+
 .day h3 {
   margin-top: 18px;
   padding-bottom: 6px;
@@ -291,9 +306,8 @@
 
 .fall-state {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 5px;
+  align-items: flex-start;
+  gap: 6px;
   margin-top: 4px;
   font-size: 0.94rem;
   font-weight: 600;
@@ -303,6 +317,7 @@
 .fall-state svg {
   width: 17px;
   height: 17px;
+  margin-top: 3px;
   flex: none;
 }
 
@@ -341,6 +356,8 @@
   box-shadow: none;
 }
 
+/* ---------- Tablet ---------- */
+
 @media (min-width: 700px) {
   .now {
     border-radius: 0 0 36px 36px;
@@ -352,6 +369,110 @@
   }
 
   .emily {
-    width: 92px;
+    width: 96px;
+  }
+}
+
+/* ---------- Desktop: Emily and the answer stay put on the left, the history
+   scrolls on the right. ---------- */
+
+@media (min-width: 980px) {
+  main {
+    display: grid;
+    grid-template-columns: minmax(400px, 42%) 1fr;
+    min-height: 100dvh;
+  }
+
+  .now {
+    position: sticky;
+    top: 0;
+    height: 100dvh;
+    display: grid;
+    align-items: center;
+    border-radius: 0 44px 44px 0;
+    overflow: auto;
+  }
+
+  .now-inner {
+    width: 100%;
+    max-width: 470px;
+    padding: 48px 40px;
+  }
+
+  .brand {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 14px;
+    margin-bottom: 30px;
+  }
+
+  .emily {
+    width: 210px;
+    margin-left: -8px;
+    filter: drop-shadow(0 14px 18px rgb(38 41 42 / 0.14));
+  }
+
+  .wordmark {
+    font-size: 1.5rem;
+  }
+
+  .now h1 {
+    font-size: clamp(2.3rem, 3.4vw, 3.1rem);
+  }
+
+  .now blockquote {
+    font-size: 1.5rem;
+  }
+
+  .now-detail {
+    font-size: 1.15rem;
+  }
+
+  .go {
+    max-width: 340px;
+  }
+
+  .go-who div {
+    max-width: 380px;
+  }
+
+  .page {
+    width: 100%;
+    max-width: 760px;
+    margin: 0;
+    padding: 64px 56px 80px;
+  }
+
+  .history h2 {
+    margin-top: 0;
+    font-size: 1.7rem;
+  }
+
+  .fall {
+    grid-template-columns: 6rem 1fr;
+    padding: 18px 0;
+  }
+
+  /* What she said on the left, what happened on the right. */
+  .fall-body {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: baseline;
+    gap: 6px 28px;
+  }
+
+  .fall-said {
+    font-size: 1.15rem;
+  }
+
+  .fall-state {
+    margin-top: 0;
+    white-space: nowrap;
+  }
+
+  .fall-body .go-link,
+  .fall-body .go-who-compact {
+    grid-column: 1 / -1;
+    justify-self: start;
   }
 }

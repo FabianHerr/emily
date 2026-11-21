@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery } from 'convex/react'
 import { api } from '../convex/_generated/api'
 import type { Id } from '../convex/_generated/dataModel'
@@ -63,14 +63,57 @@ function useNow(): number {
   return now
 }
 
+// How far Emily's eyes travel toward the pointer, in SVG units.
+const LOOK_MAX_X = 7
+const LOOK_MAX_Y = 5
+// The pointer distance (px) at which her eyes reach that limit.
+const LOOK_REACH_PX = 320
+
+// Speech-to-text writes sounds as tags: "[silence]", "[sighs]". Those are not words
+// the person said, so they are never shown as a quote.
+function spokenWords(transcript: string | null): string | null {
+  if (transcript === null) return null
+  const words = transcript.replace(/\[[^\]]*\]/g, ' ').replace(/\s+/g, ' ').trim()
+  return words === '' ? null : words
+}
+
 const isOpen = (incident: Incident) =>
   incident.status === 'emergency' || incident.status === 'precautionary'
 
 // Emily's cloud in her two pastels. Eyes are open and blink now and then (App.css);
 // when something needs attention her brows lift and the smile goes.
 function EmilyCloud({ mood }: { mood: Mood }) {
+  const svgRef = useRef<SVGSVGElement>(null)
+
+  // Her eyes follow the pointer (mouse, pen or finger). Set as CSS variables so React
+  // does not re-render on every move.
+  useEffect(() => {
+    const svg = svgRef.current
+    if (!svg || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+    let frame = 0
+    const look = (event: PointerEvent) => {
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(() => {
+        const box = svg.getBoundingClientRect()
+        const dx = event.clientX - (box.left + box.width / 2)
+        const dy = event.clientY - (box.top + box.height * 0.6)
+        const pull = Math.min(1, Math.hypot(dx, dy) / LOOK_REACH_PX)
+        const angle = Math.atan2(dy, dx)
+        svg.style.setProperty('--look-x', (Math.cos(angle) * pull * LOOK_MAX_X).toFixed(2))
+        svg.style.setProperty('--look-y', (Math.sin(angle) * pull * LOOK_MAX_Y).toFixed(2))
+      })
+    }
+    window.addEventListener('pointermove', look, { passive: true })
+    window.addEventListener('pointerdown', look, { passive: true })
+    return () => {
+      cancelAnimationFrame(frame)
+      window.removeEventListener('pointermove', look)
+      window.removeEventListener('pointerdown', look)
+    }
+  }, [])
+
   return (
-    <svg className={`emily emily-${mood}`} viewBox="0 0 200 160" role="img" aria-label="Emily">
+    <svg ref={svgRef} className={`emily emily-${mood}`} viewBox="0 0 200 160" role="img" aria-label="Emily">
       <defs>
         <linearGradient id="emily-base" x1="0" y1="0.1" x2="1" y2="0.9">
           <stop offset="0" stopColor="#a6dfbd" />
@@ -97,13 +140,15 @@ function EmilyCloud({ mood }: { mood: Mood }) {
         <path className="emily-brow-left" d="M64 68q9-6 18-3" />
         <path className="emily-brow-right" d="M120 65q9-3 18 3" />
       </g>
-      <g className="emily-eyes" fill="#46584f">
-        <ellipse cx="76" cy="96" rx="9.5" ry="12.5" />
-        <ellipse cx="126" cy="96" rx="9.5" ry="12.5" />
-      </g>
-      <g fill="#fff" fillOpacity="0.85" className="emily-glints">
-        <circle cx="79" cy="91" r="3" />
-        <circle cx="129" cy="91" r="3" />
+      <g className="emily-look">
+        <g className="emily-eyes" fill="#46584f">
+          <ellipse cx="76" cy="96" rx="9.5" ry="12.5" />
+          <ellipse cx="126" cy="96" rx="9.5" ry="12.5" />
+        </g>
+        <g fill="#fff" fillOpacity="0.85" className="emily-glints">
+          <circle cx="79" cy="91" r="3" />
+          <circle cx="129" cy="91" r="3" />
+        </g>
       </g>
       <path className="emily-smile" d="M92 118q9 7 18 0" fill="none" stroke="#46584f" strokeWidth="4.5" strokeLinecap="round" />
     </svg>
@@ -236,8 +281,8 @@ function NowPanel({
       fresh.status === 'emergency'
         ? `${personName} fell at ${timeFormat.format(fresh.createdAt)}`
         : `${personName} may have fallen at ${timeFormat.format(fresh.createdAt)}`
-    quote = fresh.transcript
-    detail = fresh.transcript ? null : `No answer from ${personName} yet.`
+    quote = spokenWords(fresh.transcript)
+    detail = quote ? null : `No answer from ${personName} yet.`
     action = fresh
   } else if (fresh && fresh.status === 'asking') {
     mood = 'alert'
@@ -311,6 +356,7 @@ function FallRow({
   showAction: boolean
 }) {
   const state = stateOf(incident)
+  const said = spokenWords(incident.transcript)
   return (
     <li className="fall">
       <p className="fall-when">
@@ -320,12 +366,12 @@ function FallRow({
         <span title="Strength of the impact">{incident.impactMaxG.toFixed(1)} g</span>
       </p>
       <div className="fall-body">
-        <p className={incident.transcript ? 'fall-said' : 'fall-said fall-silent'}>
-          {incident.transcript ? `“${incident.transcript}”` : 'No answer'}
+        <p className={said ? 'fall-said' : 'fall-said fall-silent'}>
+          {said ? `“${said}”` : 'No answer'}
         </p>
         <p className={`fall-state fall-state-${state.kind}`}>
           {state.kind === 'ok' ? <CheckIcon /> : state.kind === 'alert' ? <AlertIcon /> : <ClockIcon />}
-          {state.text}
+          <span>{state.text}</span>
         </p>
         {showAction && (
           <OnMyWay compact names={names} who={who} onGo={(name) => onGo(incident._id, name)} />
@@ -366,9 +412,18 @@ function History({
     else days.push({ label, items: [incident] })
   }
 
+  const today = incidents.filter((i) => dayLabel(i.createdAt, now) === 'Today')
+  const waiting = today.filter(isOpen).length
+  const summary =
+    today.length === 0
+      ? 'None today.'
+      : // The list is capped, so a full list of today's falls may be missing older ones.
+        `${today.length}${today.length === incidents.length && incidents.length >= 20 ? ' or more' : ''} today.${waiting === 0 ? 'Every one was answered.' : waiting === 1 ? 'One still needs someone.' : `${waiting} still need someone.`}`
+
   return (
     <section className="history">
       <h2>Falls</h2>
+      <p className="history-summary">{summary}</p>
       {days.map((day) => (
         <div key={day.label} className="day">
           <h3>{day.label}</h3>
