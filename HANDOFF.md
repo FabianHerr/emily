@@ -271,7 +271,10 @@ No usar SisFall ni KFall: son de cintura.
 - Texto a voz: `POST https://api.elevenlabs.io/v1/text-to-speech/{voice_id}?output_format=wav_16000` con `model_id = eleven_flash_v2_5`. Existe `wav_16000`, así que no haría falta agregar la cabecera; igual comprobar que el archivo empiece con `RIFF`.
 - Pushover: la respuesta de `priority=2` trae `receipt`. El callback envía `receipt`, `acknowledged`, `acknowledged_at`, `acknowledged_by`, `acknowledged_by_device`. Cancelar repeticiones: `POST https://api.pushover.net/1/receipts/{receipt}/cancel.json`. Título máx. 250 caracteres, mensaje máx. 1024.
 
+**ElevenLabs en el código (20 nov):** `convex/elevenlabs.ts` tiene dos internal actions, `transcribe({ audioId })` y `speak({ text })`, hechas con el SDK oficial `@elevenlabs/elevenlabs-js`. El archivo usa `"use node"` porque el SDK no funciona en el runtime normal de Convex. Ninguna de las dos lanza errores: si algo falla o se pasa del tiempo (4 s y 3 s), devuelven `null`. La clave está en Convex (`ELEVENLABS_API_KEY`); falta `ELEVENLABS_VOICE_ID` (CJ-12), y sin ella `speak` devuelve `null`. **Todavía no se han probado contra la API real** (no se ha gastado ningún crédito).
+
 **Sigue por verificar:**
+- Cuánto tarda el arranque en frío de las actions de Node en Convex (puede sumar al tiempo de respuesta; medir en CJ-18).
 - Tiempos reales de cada paso, volumen del parlante, y si Scribe entiende una voz débil grabada con el reloj.
 - Umbral de "golpe fuerte" (inicio: > 3 g).
 
