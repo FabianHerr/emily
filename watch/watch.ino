@@ -3,6 +3,7 @@
 // CJ-5: detect a fall with thresholds, vibrate and show the values on screen.
 // CJ-8: connect to the phone hotspot and POST the fall to Convex (HANDOFF section 6).
 // CJ-10: after a fall, play "Are you OK?" and record 5 s from the microphone.
+// CJ-11: send that recording as the body of POST /fall.
 
 #include <LilyGoLib.h>
 #include <LV_Helper.h>
@@ -43,7 +44,7 @@ const uint8_t VIBRATION_REPEATS = 3;
 const uint32_t WIFI_CONNECT_TIMEOUT_MS = 15000;
 const uint32_t HTTP_TIMEOUT_MS = 8000;
 const uint32_t SEND_RETRY_MS = 5000;
-const int SEND_MAX_RETRIES = 6;               // after the first attempt
+const uint32_t WIFI_NUDGE_MS = 10000;         // call WiFi.reconnect() at most this often while offline
 const float MODEL_CONFIDENCE = 1.0f;          // no model yet (CJ-22)
 const uint32_t SCREEN_WIFI_REFRESH_MS = 1000;
 
@@ -55,7 +56,13 @@ const uint16_t RECORD_SAMPLE_RATE = 16000;
 const uint8_t RECORD_CHANNELS = 1;            // mono
 const float MIC_GAIN_DB = 12.0f;              // software gain with soft clipping; library default is 0 on core 3.x.
                                               // 20 dB measured rms -5.7 dB / peak 0 dB (too hot); 12 dB aims ~ -14 dB rms
-const bool PLAY_BACK_RECORDING = true;        // CJ-10 test: play the answer back; CJ-11 sends it instead
+const bool PLAY_BACK_RECORDING = false;       // true = play the answer back before sending (CJ-10 test)
+
+// Sending the recording (CJ-11).
+const uint32_t AUDIO_HTTP_TIMEOUT_MS = 10000;
+const int AUDIO_SEND_TRIES = 2;               // one try + one retry, then send without audio
+const uint32_t AUDIO_WIFI_WAIT_MS = 15000;    // wait this long for WiFi before giving up on the audio
+const uint32_t SEND_TASK_STACK = 12288;       // TLS + HTTP in the send task
 
 struct AccelSample {
   uint32_t tMs;
@@ -102,6 +109,9 @@ FallEvent fallToSend;
 String incidentId;             // from the last POST /fall answer
 SendStatus shownSendStatus = SendStatus::Idle;
 volatile bool noConnectionBuzz = false;  // set by the send task when the first attempt fails
+uint8_t *volatile audioToSend = nullptr;  // recording handed to the send task (it frees it)
+volatile size_t audioToSendLen = 0;
+portMUX_TYPE handoffMux = portMUX_INITIALIZER_UNLOCKED;  // guards the hand-off between loop() and the task
 
 // The question and the recording block for ~8 s, so they run from loop(), not from a UI callback.
 bool askRequested = false;
@@ -167,9 +177,8 @@ void onFall(const FallEvent &f) {
   showFall(f);
   Serial.printf("FALL impact_max_g=%.2f seconds_still=%d position_changed=%d free_fall=%d\n",
                 f.impactMaxG, f.secondsStill, f.positionChanged, f.freeFall);
-  // Detect -> vibrate -> send (in the background) -> ask "Are you OK?" and record.
+  // Round 1: fall -> vibrate -> "Are you OK?" -> record 5 s -> POST /fall with the audio.
   fallToSend = f;
-  sendRequested = true;
   askRequested = true;
 }
 
@@ -194,8 +203,8 @@ void refreshScreenNow() {
   lv_refr_now(NULL);
 }
 
-// Blocking: ~2 s question + 0.3 s + 5 s recording. The fall is already detected and sent
-// in the background, so pausing the accelerometer here is fine.
+// Blocking: ~3 s question + 0.3 s + 5 s recording. The fall is already detected, so pausing
+// the accelerometer here is fine. The recording is handed to the send task, which frees it.
 void askAndRecord() {
   AudioOutputIf *out = instance.getAudioOutput();
   AudioInputIf *in = instance.getAudioInput();
@@ -223,19 +232,52 @@ void askAndRecord() {
     refreshScreenNow();
     out->playWAV(wav, wavSize);
   }
-  if (wav) free(wav);  // CJ-11 will send it before freeing
 
-  // Show the send status again (it may have changed while we were blocked).
+  // Hand the recording to the send task (it frees it). If the task is still busy with an
+  // older fall that it never picked up, drop that older clip.
+  if (!ok && wav) {
+    free(wav);
+    wav = nullptr;
+  }
+  taskENTER_CRITICAL(&handoffMux);
+  uint8_t *older = audioToSend;
+  audioToSend = wav;
+  audioToSendLen = wav ? wavSize : 0;
+  sendStatus = SendStatus::Sending;  // so the screen never shows the previous fall's status
+  sendRequested = true;
+  taskEXIT_CRITICAL(&handoffMux);
+  if (older) free(older);
+
   shownSendStatus = SendStatus::Idle;
   lv_label_set_text(statusLabel, "Fall detected");
   nextSampleMs = millis();  // restart sampling cleanly after the pause
 }
 
-// One POST /fall. Returns true and fills incidentId on HTTP 200.
-bool postFall(const FallEvent &f) {
+// Auto-reconnect gives up after some errors (e.g. a wrong password), so nudge it now and then.
+void nudgeWifi() {
+  static uint32_t lastNudgeMs = 0;
+  if (WiFi.status() == WL_CONNECTED || millis() - lastNudgeMs < WIFI_NUDGE_MS) return;
+  lastNudgeMs = millis();
+  WiFi.reconnect();
+}
+
+// Waits up to maxMs for WiFi; gives up early if a newer fall is waiting.
+bool waitForWifi(uint32_t maxMs) {
+  uint32_t t0 = millis();
+  while (WiFi.status() != WL_CONNECTED) {
+    if (millis() - t0 >= maxMs || sendRequested) return false;
+    nudgeWifi();
+    vTaskDelay(pdMS_TO_TICKS(250));
+  }
+  return true;
+}
+
+// One POST /fall with an optional WAV body (len 0 = no audio). Returns the HTTP code
+// (negative = network error) and fills incidentId on 200.
+int postFall(const FallEvent &f, uint8_t *audio, size_t len, uint32_t timeoutMs) {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("SEND no WiFi");
-    return false;
+    return -1;
   }
   String url = String(CONVEX_SITE_URL) + "/fall?device=" + DEVICE_ID + "&round=1" +
                "&impact=" + String(f.impactMaxG, 2) + "&still=" + String(f.secondsStill) +
@@ -244,29 +286,35 @@ bool postFall(const FallEvent &f) {
 
   WiFiClientSecure client;
   client.setInsecure();  // demo only (HANDOFF section 10)
+  client.setHandshakeTimeout(timeoutMs / 1000);  // seconds; the library default is 120 s
   HTTPClient http;
-  http.setConnectTimeout(HTTP_TIMEOUT_MS);
-  http.setTimeout(HTTP_TIMEOUT_MS);
+  http.setConnectTimeout(timeoutMs);
+  http.setTimeout(timeoutMs);
   if (!http.begin(client, url)) {
     Serial.println("SEND begin failed");
-    return false;
+    return -1;
   }
+  if (len > 0) http.addHeader("Content-Type", "audio/wav");  // HTTPClient sets Content-Length
   uint32_t t0 = millis();
-  int code = http.POST((uint8_t *)nullptr, 0);  // empty body until CJ-11 adds the audio
+  int code = http.POST(audio, len);
   String body = code > 0 ? http.getString() : http.errorToString(code);
   http.end();
-  Serial.printf("SEND http=%d in %lu ms body=%s\n", code, (unsigned long)(millis() - t0), body.c_str());
-  if (code != 200) return false;
+  Serial.printf("SEND http=%d audio=%u bytes in %lu ms stack_free=%u body=%s\n", code, (unsigned)len,
+                (unsigned long)(millis() - t0), (unsigned)uxTaskGetStackHighWaterMark(NULL), body.c_str());
+  if (code != 200) return code;
 
   // Body is {"incidentId":"..."}; a tiny search is enough, no JSON library needed.
   int key = body.indexOf("\"incidentId\"");
   int start = key < 0 ? -1 : body.indexOf('"', body.indexOf(':', key) + 1);
   int end = start < 0 ? -1 : body.indexOf('"', start + 1);
-  if (end < 0) return false;
+  if (end < 0) return -1;
   incidentId = body.substring(start + 1, end);
   Serial.printf("INCIDENT %s\n", incidentId.c_str());
-  return true;
+  return 200;
 }
+
+// 400/404 will not get better by retrying (bad request, unknown device).
+bool isFinalError(int code) { return code == 400 || code == 404; }
 
 void sendTask(void *) {
   for (;;) {
@@ -274,18 +322,40 @@ void sendTask(void *) {
       vTaskDelay(pdMS_TO_TICKS(50));
       continue;
     }
-    sendRequested = false;
+    taskENTER_CRITICAL(&handoffMux);
     FallEvent f = fallToSend;
+    uint8_t *audio = audioToSend;
+    size_t audioLen = audioToSendLen;
+    audioToSend = nullptr;
+    audioToSendLen = 0;
+    sendRequested = false;
     sendStatus = SendStatus::Sending;
-    bool ok = postFall(f);
-    if (!ok) noConnectionBuzz = true;
-    for (int retry = 1; !ok && retry <= SEND_MAX_RETRIES && !sendRequested; retry++) {
-      sendStatus = SendStatus::Retrying;
-      Serial.printf("SEND retry %d/%d in %lu ms\n", retry, SEND_MAX_RETRIES, (unsigned long)SEND_RETRY_MS);
-      vTaskDelay(pdMS_TO_TICKS(SEND_RETRY_MS));
-      ok = postFall(f);
+    taskEXIT_CRITICAL(&handoffMux);
+
+    // With audio: wait a little for WiFi (a short hotspot blip should not cost the clip),
+    // then one try + one retry. After that, send without audio so the alert still goes out.
+    int code = -1;
+    for (int i = 0; audio && code != 200 && !isFinalError(code) && i < AUDIO_SEND_TRIES; i++) {
+      if (!waitForWifi(AUDIO_WIFI_WAIT_MS)) break;
+      code = postFall(f, audio, audioLen, AUDIO_HTTP_TIMEOUT_MS);
     }
-    sendStatus = ok ? SendStatus::Sent : SendStatus::Failed;
+    if (audio) free(audio);
+    if (code != 200 && !isFinalError(code)) {
+      noConnectionBuzz = true;
+      code = postFall(f, nullptr, 0, HTTP_TIMEOUT_MS);
+    }
+    // Keep trying until it is sent or a newer fall replaces it (HANDOFF section 7: the incident
+    // goes out when the connection comes back; the server merges repeats within 60 s).
+    for (int retry = 1; code != 200 && !isFinalError(code) && !sendRequested; retry++) {
+      sendStatus = SendStatus::Retrying;
+      Serial.printf("SEND retry %d in %lu ms (no audio)\n", retry, (unsigned long)SEND_RETRY_MS);
+      vTaskDelay(pdMS_TO_TICKS(SEND_RETRY_MS));
+      nudgeWifi();
+      if (WiFi.status() == WL_CONNECTED) code = postFall(f, nullptr, 0, HTTP_TIMEOUT_MS);
+    }
+    if (isFinalError(code)) Serial.printf("SEND gave up: http=%d\n", code);
+    if (sendRequested) continue;  // a newer fall is waiting; its status comes next
+    sendStatus = code == 200 ? SendStatus::Sent : SendStatus::Failed;
   }
 }
 
@@ -449,7 +519,7 @@ void setup() {
   setupScreen();
   lv_timer_handler();  // draw the screen before the (up to 15 s) WiFi wait
   connectWifi();
-  xTaskCreatePinnedToCore(sendTask, "sendFall", 8192, nullptr, 1, nullptr, 0);
+  xTaskCreatePinnedToCore(sendTask, "sendFall", SEND_TASK_STACK, nullptr, 1, nullptr, 0);
 
   if (PRINT_RAW_SAMPLES) Serial.println("t_ms,x,y,z,mag");
   Serial.println("READY");
