@@ -1,0 +1,354 @@
+# HANDOFF — Reloj que detecta caídas · McGill CodeJam 16
+
+Escrito el viernes 20 nov 2026, 8:30 PM. Sirve para dos lectores: **un compañero de equipo** y **otro chat de Claude**. Es autosuficiente: no hace falta leer nada más para empezar.
+
+> **Ojo:** las decisiones son del domingo 15 nov. Si algo ya cambió, manda lo real y corrige este archivo.
+>
+> **Actualizado el viernes 20 nov en la noche:** reloj en la mano y hardware confirmado (sección 3), y la lista de tareas ahora es el kanban del equipo (sección 13).
+
+---
+
+## 1. Qué construimos
+
+Un **reloj** que detecta cuando un adulto mayor se cae, le pregunta en voz alta si está bien y avisa a su familia.
+
+- Solo sensores, **sin cámaras**: la persona no debe sentirse vigilada.
+- Dos roles: **Ser querido** (lleva el reloj) y **Familia** (recibe alertas y usa la app web).
+
+**Ejemplo:** Rosa se cae a las 2:14. El reloj pregunta "Are you OK?". Rosa dice "me duele la cadera, no puedo levantarme". A los pocos segundos Lucie recibe una alerta en el teléfono y el reloj le dice a Rosa "ya le avisé a Lucie".
+
+## 2. Hackathon
+
+| | |
+|---|---|
+| Evento | McGill CodeJam 16, edificio Trottier |
+| Hacking | Viernes 20 nov 7:00 PM → domingo 22 nov 12:00 PM |
+| Check-in del equipo | Domingo 10:00 AM (límite) |
+| Entrega | Domingo 12:00 PM |
+| Jueces | Domingo 1:00–3:30 PM, Trottier Mezzanine |
+| Equipo | Fabian (Mac) y Sebastian (Windows). Confirmado: podemos competir siendo 2 |
+| Regla clave | Todo el código se escribe desde cero durante el hackathon. No se reutilizan proyectos anteriores |
+| Contacto | codejam@mcgilleus.ca |
+
+## 3. Estado
+
+**Hecho (antes del hackathon):** investigación, requisitos, arquitectura, contratos de datos. Cero código.
+
+**Confirmado (viernes 20 nov):**
+- **Reloj en la mano y enciende.** Es el T-Watch S3 (ESP32-S3 LoRa), con el firmware de fábrica todavía puesto. La pantalla táctil funciona.
+- **Acelerómetro: BMA423** (lo dice la caja). Interrupt IO14, SDA IO10, SCL IO11.
+- **Equipo de 2:** sí podemos competir siendo dos.
+- **Hardware propio:** las reglas no lo prohíben.
+- **Repo:** `codeJam`, creado vacío en la Mac de Fabian (solo `git init`; todavía no está en GitHub).
+
+**Hardware del reloj (caja + pantalla de información del firmware de fábrica):**
+
+| Pieza | Chip | Pines |
+|---|---|---|
+| Procesador | ESP32-S3, 16 MB flash, ~8 MB PSRAM | — |
+| Acelerómetro | BMA423 | INT IO14 · SDA IO10 · SCL IO11 |
+| Micrófono | PDM | Data IO47 · Sclk IO44 |
+| Parlante | MAX98357A (I2S) | BCK IO48 · WS IO15 · DOUT IO46 |
+| Vibración | DRV2605 | SDA IO10 · SCL IO11 |
+| Pantalla | ST7789V 1.54" 240×240 | — |
+| Táctil | Capacitivo | INT IO16 · SDA IO39 · SCL IO40 |
+| Radio | SX1262 (LoRa) | — |
+| Infrarrojo | — | IO02 |
+| Botón | Mantener 2 s enciende, 6 s apaga | — |
+
+**Estado sin confirmar (pregúntale a Fabian):**
+- ¿El reloj suena y graba? (todavía no se ha subido código propio)
+- ¿Está instalado Arduino IDE + LilyGoLib en las dos laptops? ¿Subió `helloworld`?
+- ¿Hay cuentas y claves de Convex, ElevenLabs y Pushover?
+- ¿Quién hace qué? El kanban asume Fabian = backend y web, Sebastian = reloj. Fabian no lo ha confirmado.
+
+## 4. Decisiones tomadas
+
+| Tema | Elegido | Por qué |
+|---|---|---|
+| Hardware | LilyGO T-Watch S3 | Reloj con acelerómetro, micrófono, parlante, vibración, WiFi y batería |
+| Detección de caídas | **Dentro del reloj**: umbrales + Random Forest | Funciona sin internet y no gasta batería ni cuota mandando datos todo el tiempo |
+| Backend y app web | Convex | Todo centralizado y en tiempo real |
+| Voz a texto | ElevenLabs Scribe v2 | Debe entender voces débiles o roncas |
+| Texto a voz | ElevenLabs Flash v2.5 | Rápido |
+| Decisión | Un modelo de IA que devuelve JSON | **Por elegir** |
+| Aviso a la familia | Pushover | Suena en silencio, se repite hasta confirmar, tiene callback |
+| Convex → reloj | Polling | El reloj no tiene dirección pública; sin servicios extra |
+| Idioma de la app | **Inglés** en todo: voz, pantalla del reloj, avisos, portal, y nombres en el código (campos, tablas, archivos) | Se presenta en inglés. Decidido el 20 nov. Estos documentos y el tablero siguen en español |
+
+**Descartado, no volver a proponer:** app de iPhone, Apple Watch, Twilio, cámaras, Raspberry Pi, mandar el acelerómetro crudo a Convex.
+
+## 5. Arquitectura
+
+```
+RELOJ (C++)                                     FAMILIA
+- Umbrales + Random Forest                      - App Pushover: alerta + "Ya voy"
+- "Are you OK?" y graba 5 s                     - App web: historial, pastillas
+- Preprocesa los datos del golpe                          ^        |
+      |  POST /fall (audio + datos)              Pushover |        | "Ya voy" (/ack)
+      v                                                   |        v
+CONVEX ---------------------------------------------------------------
+  AI Service ---------------------------> Notify Family
+   Scribe -> junta datos -> IA (JSON)      Pushover, repite hasta confirmar
+      |
+      v
+  Talk to Loved One                        Incidents y Devices
+   texto a voz -> audio listo               estado de cada caída, latido
+      |
+      +--> el reloj lo recoge por polling (GET /poll)
+```
+
+| Servicio en Convex | Qué hace | Llama a |
+|---|---|---|
+| AI Service | Transcribe, junta los datos, decide | ElevenLabs Scribe + modelo de IA |
+| Notify Family | Avisa y espera el "Ya voy" | Pushover |
+| Talk to Loved One | Convierte la respuesta en audio | ElevenLabs Flash v2.5 |
+| Incidents y Devices | Guarda cada caída; vigila el latido | Base de datos de Convex |
+
+AI Service llama a Notify Family y a Talk to Loved One **en paralelo**: el aviso nunca espera al audio.
+
+## 6. Contratos de datos
+
+**Audio, en los dos sentidos:** PCM de 16 bits, 16 kHz, mono.
+
+**El reloj envía con el audio (ya preprocesado):**
+```json
+{ "impact_max_g": 3.4, "seconds_still": 8, "position_changed": true,
+  "model_confidence": 0.91, "round": 1 }
+```
+
+**La IA recibe:** lo anterior + `"transcript": "my hip hurts"` (o `null`).
+
+**La IA devuelve:**
+```json
+{ "notify": true, "level": "emergency", "severity": "severe", "confidence": 0.9,
+  "family_summary": "She says her hip hurts and she can't get up.",
+  "reply_to_person": "Stay calm Rosa, I've told Lucie.",
+  "ask_again": false }
+```
+`level`: `none` | `precautionary` | `emergency`. El mensaje a la familia cita lo que la persona dijo, **sin diagnósticos**.
+
+**Rutas HTTP (HTTP actions de Convex en `https://<deployment>.convex.site`). El reloj siempre inicia.**
+
+| Ruta | Quién llama | Envía | Recibe |
+|---|---|---|---|
+| `POST /fall` | Reloj | Audio 5 s + datos + ronda | `{ "incidentId": "abc" }` |
+| `GET /poll` | Reloj | Su identificador | `{ "audioUrl": "...", "text": "...", "askAgain": false }` o vacío |
+| `GET /audio/:id` | Reloj | — | El audio de la respuesta |
+| `POST /heartbeat` | Reloj | `{ "battery": 72 }` | OK |
+| `POST /ack` | Pushover | Recibo confirmado | OK |
+
+## 7. Flujo de una caída: dos rondas, sin apresurarse
+
+```
+Ronda 1: "Are you OK?" + 5 s de audio -> IA
+  - Dice que está bien  -> cerrar, sin avisar
+  - Pide ayuda          -> EMERGENCIA
+  - Silencio            -> si el golpe fue fuerte: aviso PREVENTIVO
+                           ("Posible caída, estamos verificando") -> Ronda 2
+
+Ronda 2 (10 s después): vuelve a preguntar + 5 s
+  - Responde            -> según lo que diga
+  - Silencio otra vez   -> aviso GRAVE ("se cayó y no responde")
+```
+
+- El reloj tiene **su propio cronómetro**: 10 s sin respuesta de Convex → repite la pregunta solo.
+- Polling: cada 60 s en día normal; cada 3 s durante una caída.
+- Sin WiFi: alarma y vibración local; el incidente se envía cuando vuelve la conexión.
+
+## 8. Respaldos y tiempos límite
+
+**Regla única:** si el modelo principal se demora, se lanza el respaldo **en paralelo** y se usa el primero que conteste. El respaldo debe ser más rápido y de **otro proveedor**.
+
+| Paso | Lanza respaldo a los | Se rinde a los | Plan C |
+|---|---|---|---|
+| Voz a texto | 2 s | 4 s | Seguir con `"transcript": null` |
+| IA (JSON) | 2,5 s | 5 s | Reglas: palabras clave + `impact_max_g` |
+| Texto a voz | 1,5 s | 3 s | Texto en la pantalla + vibración |
+
+- Tiempos = valores de inicio. **Medir y ajustar.**
+- **Última defensa:** incidente sin resolver en 30 s → aviso preventivo (`ctx.scheduler.runAfter`, se cancela si todo termina bien).
+
+```ts
+async function withFallback(principal, respaldo, suaveMs, duroMs) {
+  const p = principal();
+  const r = esperar(suaveMs).then(respaldo);
+  return Promise.race([Promise.any([p, r]), limite(duroMs)]);
+}
+```
+
+## 9. Notify Family (Pushover)
+
+```
+POST https://api.pushover.net/1/messages.json
+  token=<app>  user=<familiar>  title="Rosa fell at 2:14 PM"
+  message="She says her hip hurts and she can't get up."
+  priority=2  retry=30  expire=3600  callback=https://<deployment>.convex.site/ack
+```
+
+| Aviso | priority | Comportamiento |
+|---|---|---|
+| Preventivo | 1 | Suena una vez |
+| Emergencia / grave | 2 | Se repite cada 30 s hasta confirmar (exige `retry` ≥ 30 y `expire` ≤ 10800) |
+| Actualización cada 2 min | 0 | La programa Convex |
+
+Cada familiar instala la app Pushover y activa "Critical Alerts". Prueba gratis 30 días.
+
+## 10. El reloj
+
+**Configuración (igual en Mac y Windows):**
+1. Arduino IDE + **Arduino-ESP32 3.3.11 o superior** (con versiones anteriores no compila).
+2. **LilyGoLib** + copiar las carpetas de **LilyGoLib-ThirdParty** a `Arduino/libraries`. No usar la vieja `TTGO_TWatch_Library`.
+3. Tools: Board `LilyGo T-Watch-S3` · USB CDC On Boot `Enabled` · Partition `16M Flash (3MB APP/9.9MB FATFS)` · Board Revision `Radio-SX1262` · Upload Speed `921600`.
+4. Guía: https://github.com/Xinyuan-LilyGO/LilyGoLib/blob/master/docs/lilygo-t-watch-s3.md
+
+**Ejemplos de LilyGoLib para arrancar:**
+
+| Necesidad | Ejemplo |
+|---|---|
+| Acelerómetro (es BMA423, confirmado) | `sensor/BMA423_Accelerometer` |
+| Grabar 5 s a 16 kHz mono | `peripheral/RecordWAV` → `instance.getAudioInput()->recordWAV(5, &buf, &size, 16000, 1)` |
+| Reproducir | `peripheral/playWAV` → `instance.getAudioOutput()->playWAV(buf, size)` |
+| Vibrar | `peripheral/Vibrate_Basic` → `instance.vibrator()` o `instance.drv.setWaveform(0, n); instance.drv.run();` |
+| Pantalla | `helloworld`, carpeta `lvgl` |
+| Reloj y alarmas | `peripheral/RTC_AlarmByUnits` |
+
+**API de LilyGoLib verificada en el código de la librería (20 nov), todavía sin probar en el reloj:**
+- Inicio: `#include <LilyGoLib.h>`, `instance.begin();` en `setup()`, `instance.loop();` en `loop()`.
+- Acelerómetro: `instance.sensor->configAccelerometer(OperationMode::NORMAL, AccelFullScaleRange::FS_8G, 50.0f, AccelBandwidth::OSR2_AVG2, AccelPerfMode::CIC_AVG_MODE)`; leer con `AccelerometerData data; instance.sensor->readData(data);` → `data.mps2.x/y/z` en m/s² (dividir entre 9.80665 para g). El ejemplo viene con `FS_2G` y 100 Hz.
+- Audio: el último argumento de `recordWAV` es la cantidad de canales (usar 1). El buffer se reserva con `ps_malloc()`, ya trae cabecera WAV y se libera con `free()`. `playWAV` solo acepta WAV PCM.
+- `instance.codec` no aparece en la cabecera del T-Watch S3 (`LilyGoWatchS3.h`), aunque el ejemplo RecordWAV lo usa. Usar `getAudioInput()` / `getAudioOutput()`.
+- Modo descarga: quitar la tapa y levantar la batería sin jalar los cables; conectar el USB; mantener la corona hasta que el puerto desaparezca; mantener BOOT y presionar la corona 1 s; soltar BOOT. Al terminar, apagar y encender con la corona.
+- Reloj usado: en la primera subida, `Erase All Flash Before Sketch Upload: Enabled`; después volver a `Disabled`.
+
+**Detección:**
+1. **Portero (umbrales):** leer a 50 Hz; solo un golpe fuerte despierta al modelo. Valores de partida de la literatura: caída libre < 0,75 g, golpe > 2 g, máx. 500 ms entre ambos, quietud ~5 s. La caída libre **suma, no es obligatoria**.
+2. **Juez (Random Forest):** decide si fue caída. Solo acelerómetro, 20 Hz, sobre la **magnitud** √(x²+y²+z²). Rango del sensor: ±8 g.
+
+**Trampas conocidas:**
+- WiFi solo 2.4 GHz y eduroam es difícil → **usar el hotspot de un celular**.
+- No apagar la pantalla táctil en el código: no vuelve sin reiniciar.
+- Si no sube el código (frecuente si traía Meshtastic): abrir la tapa y entrar en modo descarga con el botón BOOT.
+- Cable **micro-USB de datos**. Corriente de carga < 130 mA.
+- Batería: pocas horas con WiFi. Cargar entre demos.
+- HTTPS obligatorio hacia Convex: `WiFiClientSecure` (para la demo vale `setInsecure()`).
+- Audio en PSRAM con `ps_malloc()`.
+
+## 11. Entrenar el Random Forest
+
+| Base de datos (muñeca) | Dónde |
+|---|---|
+| WEDA-FALL (Fitbit, 50 Hz, incluye adultos mayores) | https://github.com/joaojtmarques/WEDA-FALL |
+| Nandi et al. (41 personas, 20 Hz) | https://doi.org/10.5281/zenodo.10013090 |
+| UMAFall (muñeca derecha, 20 Hz; licencia no comercial) | https://figshare.com/articles/dataset/UMA_ADL_FALL_Dataset_zip/4214283 |
+
+```
+1. Quedarse solo con el acelerómetro de la muñeca; convertir a g; llevar todo a 20 Hz
+2. Ventanas de ~2 s alrededor de cada golpe
+3. Features: máximo, mínimo, promedio, varianza de la magnitud; cambio de orientación
+4. scikit-learn RandomForestClassifier
+5. Convertir a C++ con micromlgen (o emlearn) y pegarlo en el código del reloj
+6. Probar con caídas propias sobre un colchón
+```
+No usar SisFall ni KFall: son de cintura.
+
+## 12. Por verificar (no lo confirmé)
+
+- **Audio en este reloj:** falta probar en el reloj real que `getAudioInput()->recordWAV(...)` graba y que `getAudioOutput()->playWAV(...)` suena (CJ-2 y CJ-10). Leyendo el código parece que el micrófono PDM siempre graba en mono aunque se pida otra cantidad de canales; confirmarlo con el tamaño del archivo (~160 KB para 5 s).
+- **Función de batería** de `instance.pmic` (para el heartbeat, CJ-24): nombre sin verificar.
+
+**Ya resuelto con la documentación (20 nov):**
+- Scribe: `model_id = scribe_v2` en `POST https://api.elevenlabs.io/v1/speech-to-text` (cabecera `xi-api-key`, multipart con `file` y `model_id`; el texto viene en `text`). `scribe_v1` está obsoleto. La API no indica silencio: tratar un texto de menos de 3 letras como silencio.
+- Texto a voz: `POST https://api.elevenlabs.io/v1/text-to-speech/{voice_id}?output_format=wav_16000` con `model_id = eleven_flash_v2_5`. Existe `wav_16000`, así que no haría falta agregar la cabecera; igual comprobar que el archivo empiece con `RIFF`.
+- Pushover: la respuesta de `priority=2` trae `receipt`. El callback envía `receipt`, `acknowledged`, `acknowledged_at`, `acknowledged_by`, `acknowledged_by_device`. Cancelar repeticiones: `POST https://api.pushover.net/1/receipts/{receipt}/cancel.json`. Título máx. 250 caracteres, mensaje máx. 1024.
+
+**Sigue por verificar:**
+- Tiempos reales de cada paso, volumen del parlante, y si Scribe entiende una voz débil grabada con el reloj.
+- Umbral de "golpe fuerte" (inicio: > 3 g).
+
+## 13. Tareas del sprint (kanban)
+
+**Tablero en vivo (fuente de verdad):** https://claude.ai/artifact/MNWCwnhqiiRGp8ERtAke7i
+
+- Columnas: Por hacer → En curso → En review → Hecho.
+- El estado real está en el tablero. Esta lista es una copia del viernes 20 nov en la noche: solo CJ-1 estaba en Hecho, el resto en Por hacer.
+- Cada tarea tiene en el tablero su especificación completa (archivos, pasos, llamadas exactas a las APIs) y su "Listo cuando…". Ejemplo, CJ-5: dejar caer el reloj sobre una almohada lo hace vibrar; caminar y aplaudir no.
+- F = Fabian (backend y web), S = Sebastian (reloj), F+S = los dos. Reparto propuesto, sin confirmar. Las dos tareas de ML (CJ-21 y CJ-22) se hacen juntos, para aprender: lo pidió Fabian.
+- Prioridad: **Imp.** = imprescindible, Importante, Si sobra.
+
+Primero el camino completo con lo mínimo; después se mejora cada pieza.
+
+**Vie noche (7 PM–2 AM) — meta: primer demo de punta a punta**
+
+| # | Tarea | Quién | Espera a | Prioridad |
+|---|---|---|---|---|
+| CJ-1 | Confirmar qué acelerómetro trae el reloj — **Hecho: BMA423** | S | — | Imp. |
+| CJ-2 | Reloj: conexión segura, Arduino IDE + LilyGoLib y subir `helloworld` | S | — | Imp. |
+| CJ-3 | Repo en GitHub + proyecto Convex + claves | F | — | Imp. |
+| CJ-4 | Reloj: leer el acelerómetro a 50 Hz | S | CJ-2 | Imp. |
+| CJ-5 | Reloj: detectar caída con umbrales y vibrar | S | CJ-4 | Imp. |
+| CJ-6 | Convex: tablas + `POST /fall` que guarda el incidente | F | CJ-3 | Imp. |
+| CJ-7 | Convex: Notify Family con Pushover + `/ack` | F | CJ-6 | Imp. |
+| CJ-8 | Reloj: WiFi por hotspot + `POST /fall` con datos | S | CJ-5, CJ-6 | Imp. |
+| CJ-9 | **Hito 1:** primer demo de punta a punta (3 veces seguidas) | F+S | CJ-7, CJ-8 | Imp. |
+
+**Sáb mañana — meta: audio e IA**
+
+| # | Tarea | Quién | Espera a | Prioridad |
+|---|---|---|---|---|
+| CJ-10 | Reloj: "Are you OK?" + grabar 5 s | S | CJ-5 | Imp. |
+| CJ-11 | Reloj: enviar el audio en `POST /fall` | S | CJ-10, CJ-8 | Imp. |
+| CJ-12 | Decidir el modelo de IA y los respaldos | F | — | Imp. |
+| CJ-13 | Convex: AI Service (Scribe → IA → JSON) | F | CJ-12, CJ-7 | Imp. |
+| CJ-28 | Convex: registro de eventos (`events`) para el portal | F | CJ-6 | Importante |
+
+**Sáb tarde — meta: el reloj responde, dos rondas**
+
+| # | Tarea | Quién | Espera a | Prioridad |
+|---|---|---|---|---|
+| CJ-14 | Convex: Talk to Loved One + `/poll` + `/audio` | F | CJ-13 | Imp. |
+| CJ-15 | Reloj: polling y reproducir la respuesta | S | CJ-11, CJ-14 | Imp. |
+| CJ-16 | Convex: lógica de dos rondas | F | CJ-13 | Imp. |
+| CJ-17 | Reloj: ronda 2 + cronómetro propio | S | CJ-15 | Imp. |
+| CJ-18 | **Hito 2:** demo completo con voz, tiempos medidos | F+S | CJ-16, CJ-17 | Imp. |
+| CJ-30 | Reloj: pantallas para la persona (inglés, letra grande, botones "I'm OK" y "I need help") | S | CJ-15 | Importante |
+
+**Sáb noche — mejoras**
+
+| # | Tarea | Quién | Espera a | Prioridad |
+|---|---|---|---|---|
+| CJ-19 | Convex: respaldos, tiempos límite y última defensa | F | CJ-16 | Importante |
+| CJ-20 | App web de la familia: historial y "Ya voy" | F | CJ-16 | Importante |
+| CJ-21 | ML juntos: entrenar el Random Forest y exportarlo a C++ | F+S | — | Importante |
+| CJ-22 | ML juntos: usar el Random Forest como juez en el reloj | F+S | CJ-21, CJ-17 | Importante |
+| CJ-23 | Convex: actualización cada 2 min | F | CJ-16 | Si sobra |
+| CJ-24 | Heartbeat + aviso "protección apagada" | F+S | CJ-18 | Si sobra |
+| CJ-25 | Recordatorio de pastillas + modo sin WiFi | F+S | CJ-20 | Si sobra |
+| CJ-29 | Portal de la familia: estado, actividad en vivo y alerta urgente | F | CJ-20, CJ-28 | Importante |
+| CJ-32 | Resumen diario del agente en el portal | F | CJ-28, CJ-29, CJ-12 | Si sobra |
+
+**Dom mañana — entregar**
+
+| # | Tarea | Quién | Espera a | Prioridad |
+|---|---|---|---|---|
+| CJ-26 | Congelar el código (8 AM), ensayar la demo, grabar video de respaldo | F+S | CJ-18 | Imp. |
+| CJ-27 | Check-in 10:00 AM y entrega 12:00 PM | F+S | CJ-26 | Imp. |
+
+No existe CJ-31: se propuso "actividad inusual" y Fabian la descartó.
+
+**Dos interfaces:** el ser querido usa la pantalla del reloj (CJ-30); la familia usa el portal web (CJ-20, CJ-29, CJ-32), que lee la tabla `events` (CJ-28).
+
+Si el tiempo se acaba: con CJ-1 a CJ-18 ya hay demo. En el pitch: "la versión 2 agrega ML en el reloj y MQTT".
+
+**Fuera del MVP:** respuestas pregrabadas, WebSocket/MQTT, LoRa, optimización de batería, aviso al familiar más cercano, privacidad granular.
+
+## 14. Para el otro chat de Claude
+
+- Responde en **español**, **simple, corto y con ejemplos**. Fabian rechaza respuestas largas.
+- **Sin sobreingeniería.** Si hay dos caminos, el más simple que funcione para la demo.
+- No reabras lo descartado (sección 4) salvo que Fabian lo pida.
+- La IA redacta y clasifica; **avisar a la familia nunca puede depender de que una API responda** (secciones 7 y 8).
+- No des por hecho lo "sin confirmar" de la sección 3 ni lo de la sección 12: pregunta o verifica.
+- Al terminar o empezar una tarea, actualiza su estado en el tablero de la sección 13 (Sebastian necesita permiso de edición sobre el artefacto).
+- Docs del proyecto "Hackaton CodeJam": `claude/handoff.md` (este), `claude/arquitectura-especificaciones.md`, `claude/mvp-requisitos.md`.
+- Versión con diagramas: https://claude.ai/artifact/QF5kJyZunwwBZyudSD2Jz4
