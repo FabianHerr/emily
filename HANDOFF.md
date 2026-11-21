@@ -76,7 +76,7 @@ Un **reloj** que detecta cuando un adulto mayor se cae, le pregunta en voz alta 
 | Detección de caídas | **Dentro del reloj**: umbrales + Random Forest | Funciona sin internet y no gasta batería ni cuota mandando datos todo el tiempo |
 | Backend y app web | Convex | Todo centralizado y en tiempo real |
 | Voz a texto | ElevenLabs Scribe v2 | Debe entender voces débiles o roncas |
-| Texto a voz | ElevenLabs Flash v2.5 | Rápido |
+| Texto a voz | ElevenLabs v4 turbo (`eleven_v4_turbo`) | Suena como la voz elegida; ~0.5 s más lento que Flash v2.5 (decisión de Fabian, 21 nov) |
 | Decisión (IA) | **Claude Sonnet 5.5** (`claude-sonnet-5-5`) devuelve el JSON. Respaldo: **Google Gemini** `gemini-3.5-flash-lite`. Plan C: reglas de palabras clave | Decidido por Fabian el 21 nov (CJ-12). Sonnet: más criterio que Haiku y más rápido que Opus. Gemini: otro proveedor, modelo rápido y con nivel gratis |
 | Aviso a la familia | Pushover | Suena en silencio, se repite hasta confirmar, tiene callback |
 | Convex → reloj | Polling | El reloj no tiene dirección pública; sin servicios extra |
@@ -109,7 +109,7 @@ CONVEX ---------------------------------------------------------------
 |---|---|---|
 | AI Service | Transcribe, junta los datos, decide | ElevenLabs Scribe + modelo de IA |
 | Notify Family | Avisa y espera el "Ya voy" | Pushover |
-| Talk to Loved One | Convierte la respuesta en audio | ElevenLabs Flash v2.5 |
+| Talk to Loved One | Convierte la respuesta en audio | ElevenLabs v4 turbo |
 | Incidents y Devices | Guarda cada caída; vigila el latido | Base de datos de Convex |
 
 AI Service llama a Notify Family y a Talk to Loved One **en paralelo**: el aviso nunca espera al audio.
@@ -185,7 +185,7 @@ Ronda 2 (10 s después): vuelve a preguntar + 5 s
 |---|---|---|---|
 | Voz a texto | 2 s | 4 s | Seguir con `"transcript": null` |
 | IA (JSON) | 2,5 s | 5 s | Reglas: palabras clave + `impact_max_g` |
-| Texto a voz | 1,5 s | 3 s | Texto en la pantalla + vibración |
+| Texto a voz | 1,5 s | 5 s | Texto en la pantalla + vibración |
 
 - Tiempos = valores de inicio. **Medir y ajustar.**
 - **Última defensa:** incidente sin resolver en 30 s → aviso preventivo (`ctx.scheduler.runAfter`, se cancela si todo termina bien).
@@ -288,10 +288,10 @@ No usar SisFall ni KFall: son de cintura.
 
 **Ya resuelto con la documentación (20 nov):**
 - Scribe: `model_id = scribe_v2` en `POST https://api.elevenlabs.io/v1/speech-to-text` (cabecera `xi-api-key`, multipart con `file` y `model_id`; el texto viene en `text`). `scribe_v1` está obsoleto. La API no indica silencio: tratar un texto de menos de 3 letras como silencio.
-- Texto a voz: `POST https://api.elevenlabs.io/v1/text-to-speech/{voice_id}?output_format=wav_16000` con `model_id = eleven_flash_v2_5`. Existe `wav_16000`, así que no haría falta agregar la cabecera; igual comprobar que el archivo empiece con `RIFF`.
+- Texto a voz: `POST https://api.elevenlabs.io/v1/text-to-speech/{voice_id}?output_format=wav_16000` con `model_id = eleven_v4_turbo` (funciona con esta llamada normal, probado el 21 nov). Existe `wav_16000`, así que no haría falta agregar la cabecera; igual comprobar que el archivo empiece con `RIFF`.
 - Pushover: la respuesta de `priority=2` trae `receipt`. El callback envía `receipt`, `acknowledged`, `acknowledged_at`, `acknowledged_by`, `acknowledged_by_device`. Cancelar repeticiones: `POST https://api.pushover.net/1/receipts/{receipt}/cancel.json`. Título máx. 250 caracteres, mensaje máx. 1024.
 
-**ElevenLabs en el código (20 nov):** `convex/elevenlabs.ts` tiene dos internal actions, `transcribe({ audioId })` y `speak({ text })`, hechas con el SDK oficial `@elevenlabs/elevenlabs-js`. El archivo usa `"use node"` porque el SDK no funciona en el runtime normal de Convex. Ninguna de las dos lanza errores: si algo falla o se pasa del tiempo (4 s y 3 s), devuelven `null`. La clave está en Convex (`ELEVENLABS_API_KEY`); falta `ELEVENLABS_VOICE_ID` (CJ-12), y sin ella `speak` devuelve `null`. **Todavía no se han probado contra la API real** (no se ha gastado ningún crédito).
+**ElevenLabs en el código (20 nov):** `convex/elevenlabs.ts` tiene dos internal actions, `transcribe({ audioId })` y `speak({ text })`, hechas con el SDK oficial `@elevenlabs/elevenlabs-js`. El archivo usa `"use node"` porque el SDK no funciona en el runtime normal de Convex. Ninguna de las dos lanza errores: si algo falla o se pasa del tiempo (4 s y 5 s), devuelven `null`. La clave está en Convex (`ELEVENLABS_API_KEY`); falta `ELEVENLABS_VOICE_ID` (CJ-12), y sin ella `speak` devuelve `null`. **Todavía no se han probado contra la API real** (no se ha gastado ningún crédito).
 
 **Modelo de IA, datos verificados el 21 nov (para CJ-13 y CJ-19):**
 - Principal: `claude-sonnet-5-5` con el SDK oficial `@anthropic-ai/sdk` (no usar `fetch` directo). Clave en Convex: `ANTHROPIC_API_KEY`. Precio: $2 / $10 por millón de tokens, unos $0.002 por caída.
@@ -346,10 +346,10 @@ Cosas que ya sabemos y que es fácil pasar por alto. Cada una dice en qué tarea
 | Suena el teléfono de Fabian (iPhone, Critical Alerts) | menos de 2 s desde el envío | 21 nov, medido a ojo | menos de 10 s |
 | Voz a texto (ElevenLabs `scribe_v2`, clip de 3.2 s, 16 kHz) | mediana 0.24 s (0.23–0.40 s, 5 veces; la primera es la más lenta). Transcribió perfecto | 21 nov, dentro de Convex, voz "Grandma" de macOS | límite 4 s |
 | Decisión de Claude (`claude-sonnet-5-5`, effort low) | mediana 2.17 s (1.57–3.08 s, 12 veces) | 21 nov | 2.5 s, límite 5 s |
-| Voz de Emily (ElevenLabs `eleven_flash_v2_5`, frase de 3.8 s) | 0.45–0.49 s en caliente; **3.2 s la primera vez (en frío)** | 21 nov, dentro de Convex | límite 3 s |
+| Voz de Emily, misma frase, WAV 16 kHz, en caliente | `eleven_v4_turbo` (el elegido): 0.87–1.07 s · `eleven_v4`: 1.36–1.53 s · `eleven_flash_v2_5`: 0.36–0.49 s, y **3.2 s la primera vez (en frío)** | 21 nov, dentro de Convex | límite 5 s |
 | Cadena del servidor: voz a texto → Claude → voz de Emily | **2.3–2.5 s en caliente, 6.9 s en frío** (3 veces, sin alertas) | 21 nov | — |
 
-Ojo: la primera llamada en frío casi pasa el límite de 3 s de la voz. Antes del demo, hacer una caída de prueba para "calentar". Falta medir lo que pasa en el reloj: subir el WAV, esperar el `/poll` (CJ-14) y reproducir. La voz todavía no está conectada a `processFall`: eso es CJ-14.
+Ojo: la primera llamada en frío es mucho más lenta (v4 turbo en frío no está medido). Antes del demo, hacer una caída de prueba para "calentar". Falta medir lo que pasa en el reloj: subir el WAV, esperar el `/poll` (CJ-14) y reproducir. La voz todavía no está conectada a `processFall`: eso es CJ-14.
 
 Falta medir: desde la caída real del reloj (CJ-9), y los pasos de voz e IA (CJ-18).
 

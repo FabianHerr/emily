@@ -15,9 +15,11 @@ const STT_LANGUAGE_CODE = "en";
 // The API has no silence flag: fewer letters than this counts as silence.
 const MIN_TRANSCRIPT_LETTERS = 3;
 
-// Text to speech (HANDOFF.md section 8: give up at 3 s, watch shows text instead).
-const TTS_TIMEOUT_MS = 3000;
-const TTS_MODEL_ID = "eleven_flash_v2_5";
+// Text to speech (HANDOFF.md section 8: on timeout the watch shows text instead).
+// v4 turbo measured 0.9-1.1 s warm (flash: 0.4 s, but a flatter voice). 5 s leaves
+// room for a cold first call (flash took 3.2 s cold).
+const TTS_TIMEOUT_MS = 5000;
+const TTS_MODEL_ID = "eleven_v4_turbo";
 const TTS_OUTPUT_FORMAT = "wav_16000";
 
 // Audio contract (HANDOFF.md section 6): 16-bit PCM, 16 kHz, mono.
