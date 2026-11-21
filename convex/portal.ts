@@ -2,7 +2,7 @@
 
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
-import { acknowledgeIncident } from "./incidents";
+import { acknowledgeIncident, markIncidentFalseAlarm } from "./incidents";
 import schema from "./schema";
 
 // The portal shows this many incidents, newest first: enough for a busy week.
@@ -54,6 +54,7 @@ export const overview = query({
           level: v.union(decisionLevelValidator, v.null()),
           familySummary: v.union(v.string(), v.null()),
           acknowledgedBy: v.union(v.string(), v.null()),
+          falseAlarmBy: v.union(v.string(), v.null()),
         }),
       ),
     }),
@@ -91,6 +92,7 @@ export const overview = query({
           level,
           familySummary,
           acknowledgedBy: i.acknowledgedBy ?? null,
+          falseAlarmBy: i.falseAlarmBy ?? null,
         };
       }),
     };
@@ -113,5 +115,24 @@ export const onMyWay = mutation({
     if (!member) return { ok: false, alreadyHandled: false };
     const { alreadyHandled } = await acknowledgeIncident(ctx, incident, member.name);
     return { ok: true, alreadyHandled };
+  },
+});
+
+// The portal's "False alarm" button: closes the incident so the portal goes back to normal.
+// ok: false when the incident is gone or the name is not in that device's family.
+export const markFalseAlarm = mutation({
+  args: { incidentId: v.id("incidents"), name: v.string() },
+  returns: v.object({ ok: v.boolean() }),
+  handler: async (ctx, args) => {
+    const incident = await ctx.db.get("incidents", args.incidentId);
+    if (!incident) return { ok: false };
+    const members = await ctx.db
+      .query("familyMembers")
+      .withIndex("by_deviceId", (q) => q.eq("deviceId", incident.deviceId))
+      .take(MAX_FAMILY_MEMBERS);
+    const member = members.find((m) => m.name === args.name);
+    if (!member) return { ok: false };
+    await markIncidentFalseAlarm(ctx, incident, member.name);
+    return { ok: true };
   },
 });

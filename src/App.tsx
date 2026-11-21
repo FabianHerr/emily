@@ -15,6 +15,8 @@ const ON_THE_WAY_MS = 10 * 60 * 1000
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000
 // How often the "last seen" texts are refreshed.
 const CLOCK_TICK_MS = 15 * 1000
+// How many recent feed rows to load for the step-by-step view (the backend's maximum).
+const FEED_LIMIT = 200
 const WHO_STORAGE_KEY = 'emily.who'
 
 type Overview = NonNullable<ReturnType<typeof useQuery<typeof api.portal.overview>>>
@@ -185,71 +187,91 @@ function ClockIcon() {
   )
 }
 
-// "I'm on my way". If this phone does not know who is holding it yet, the same
-// button asks, and the answer both confirms and is remembered.
-function OnMyWay({
+type Reply = 'go' | 'false'
+
+// The two answers to a fall: "I'm on my way" and "It was a false alarm". If this phone
+// does not know who is holding it yet, the tapped answer asks, then both confirms and
+// remembers. `showGo` is false once someone is already on the way.
+function Respond({
   names,
   who,
   onGo,
+  onFalseAlarm,
   compact = false,
+  showGo = true,
 }: {
   names: string[]
   who: string | null
   onGo: (name: string) => Promise<void>
+  onFalseAlarm: (name: string) => Promise<void>
   compact?: boolean
+  showGo?: boolean
 }) {
-  const [choosing, setChoosing] = useState(false)
+  const [asking, setAsking] = useState<Reply | null>(null)
   const [sending, setSending] = useState(false)
 
-  const go = async (name: string) => {
+  const send = async (reply: Reply, name: string) => {
     setSending(true)
     try {
-      await onGo(name)
+      await (reply === 'go' ? onGo(name) : onFalseAlarm(name))
     } finally {
       setSending(false)
-      setChoosing(false)
+      setAsking(null)
     }
   }
+  const choose = (reply: Reply) => (who === null ? setAsking(reply) : send(reply, who))
 
-  if (choosing || (who === null && !compact)) {
+  if (asking !== null) {
     return (
       <div className={compact ? 'go-who go-who-compact' : 'go-who'}>
-        <p id="go-who-label">Who is on the way?</p>
+        <p id="go-who-label">{asking === 'go' ? 'Who is on the way?' : 'Who is saying it was a false alarm?'}</p>
         <div role="group" aria-labelledby="go-who-label">
           {names.map((name) => (
-            <button key={name} type="button" className="go" onClick={() => go(name)} disabled={sending}>
+            <button key={name} type="button" className="go" onClick={() => send(asking, name)} disabled={sending}>
               {name}
             </button>
           ))}
         </div>
+        <button type="button" className="text-button go-cancel" onClick={() => setAsking(null)}>
+          Cancel
+        </button>
       </div>
     )
   }
 
   if (compact) {
     return (
-      <button
-        type="button"
-        className="go-link"
-        onClick={() => (who === null ? setChoosing(true) : go(who))}
-        disabled={sending}
-      >
-        {sending ? 'Sending…' : 'I’m on my way'}
-      </button>
+      <div className="go-links">
+        {showGo && (
+          <button type="button" className="go-link" onClick={() => choose('go')} disabled={sending}>
+            I’m on my way
+          </button>
+        )}
+        <button type="button" className="go-link go-link-quiet" onClick={() => choose('false')} disabled={sending}>
+          It was a false alarm
+        </button>
+      </div>
     )
   }
 
   return (
     <div className="go-wrap">
-      <button type="button" className="go" onClick={() => go(who!)} disabled={sending}>
-        {sending ? 'Sending…' : 'I’m on my way'}
-      </button>
-      <p className="go-as">
-        Confirming as {who}.{' '}
-        <button type="button" className="text-button" onClick={() => setChoosing(true)}>
-          Not you?
+      {showGo && (
+        <button type="button" className="go" onClick={() => choose('go')} disabled={sending}>
+          {sending ? 'Sending…' : 'I’m on my way'}
         </button>
-      </p>
+      )}
+      <button type="button" className="go-second" onClick={() => choose('false')} disabled={sending}>
+        It was a false alarm
+      </button>
+      {who !== null && (
+        <p className="go-as">
+          Answering as {who}.{' '}
+          <button type="button" className="text-button" onClick={() => setAsking(showGo ? 'go' : 'false')}>
+            Not you?
+          </button>
+        </p>
+      )}
     </div>
   )
 }
@@ -260,11 +282,13 @@ function NowPanel({
   now,
   who,
   onGo,
+  onFalseAlarm,
 }: {
   overview: Overview
   now: number
   who: string | null
   onGo: (incidentId: Id<'incidents'>, name: string) => Promise<void>
+  onFalseAlarm: (incidentId: Id<'incidents'>, name: string) => Promise<void>
 }) {
   const { personName, lastHeartbeat, battery, familyNames } = overview
   const latest = overview.incidents[0]
@@ -286,6 +310,8 @@ function NowPanel({
       : `No falls need attention. The last one was ${lastWhen} at ${timeFormat.format(latest.createdAt)}.`
   let quote: string | null = null
   let action: Incident | null = null
+  // Someone is already going: the only answer left is "false alarm".
+  let showGo = true
 
   if (fresh && isOpen(fresh)) {
     mood = 'alert'
@@ -302,6 +328,8 @@ function NowPanel({
     detail = `Emily is asking ${personName} if everything is OK.`
   } else if (fresh && fresh.status === 'acknowledged' && now - fresh.createdAt < ON_THE_WAY_MS) {
     headline = `${fresh.acknowledgedBy ?? 'Someone'} is on the way`
+    action = fresh
+    showGo = false
     detail = `${personName} fell at ${timeFormat.format(fresh.createdAt)}. Emily told ${personName} that help is coming.`
   } else if (never) {
     mood = 'plain'
@@ -330,7 +358,13 @@ function NowPanel({
         {detail && <p className="now-detail">{detail}</p>}
 
         {action && (
-          <OnMyWay names={familyNames} who={who} onGo={(name) => onGo(action._id, name)} />
+          <Respond
+            names={familyNames}
+            who={who}
+            showGo={showGo}
+            onGo={(name) => onGo(action._id, name)}
+            onFalseAlarm={(name) => onFalseAlarm(action._id, name)}
+          />
         )}
 
         {watchLine && <p className="now-watch">{watchLine}</p>}
@@ -339,56 +373,144 @@ function NowPanel({
   )
 }
 
-function stateOf(incident: Incident): { kind: 'ok' | 'alert' | 'wait'; text: string } {
+type FallEvent = { _id: string; createdAt: number; text: string; level: 'info' | 'precautionary' | 'emergency' }
+type Step = { key: string; at: number | null; text: string }
+
+// One fall in one plain sentence: how it ended first, then what she said.
+function summarize(incident: Incident, personName: string): { kind: 'ok' | 'alert' | 'wait'; title: string; said: string } {
+  const words = spokenWords(incident.transcript)
+  const said = words ? `${personName} said “${words}”` : `${personName} did not answer Emily`
   switch (incident.status) {
     case 'acknowledged':
-      return { kind: 'ok', text: `${incident.acknowledgedBy ?? 'Someone'} went` }
+      return { kind: 'ok', title: `${incident.acknowledgedBy ?? 'Someone'} went to help`, said }
     case 'closed':
-      return { kind: 'ok', text: 'Was OK' }
+      return incident.falseAlarmBy
+        ? { kind: 'ok', title: 'False alarm', said: `${incident.falseAlarmBy} said it was a false alarm` }
+        : { kind: 'ok', title: `${personName} was OK`, said }
     case 'emergency':
-      return { kind: 'alert', text: 'Emergency, nobody confirmed' }
+      return { kind: 'alert', title: 'Nobody has answered this fall', said }
     case 'precautionary':
-      return { kind: 'alert', text: 'Possible fall, nobody confirmed' }
+      return { kind: 'alert', title: 'Nobody has answered this possible fall', said }
     default:
-      return { kind: 'wait', text: 'Emily is checking' }
+      return { kind: 'wait', title: `Emily is checking on ${personName}`, said }
   }
 }
 
+// What happened, step by step. Uses the activity feed when it has this fall; older
+// falls (from before the feed existed) get the steps we can tell from the fall itself.
+function stepsOf(incident: Incident, personName: string, events: FallEvent[] | undefined): Step[] {
+  if (events && events.length > 0) {
+    // A "said" row that holds only sound tags ("[typing]") was not speech.
+    const onlySounds = /said: "\s*(\[[^\]]*\]\s*)+"$/
+    return events.map((e) => ({
+      key: e._id,
+      at: e.createdAt,
+      text: onlySounds.test(e.text) ? `${personName} did not say any words` : e.text,
+    }))
+  }
+  const words = spokenWords(incident.transcript)
+  const steps: Step[] = [
+    { key: 'fall', at: incident.createdAt, text: `Fall detected (impact ${incident.impactMaxG.toFixed(1)} g)` },
+    { key: 'said', at: null, text: words ? `${personName} said: “${words}”` : `${personName} did not answer` },
+  ]
+  if (incident.status === 'acknowledged') {
+    steps.push({ key: 'end', at: null, text: `${incident.acknowledgedBy ?? 'Someone'} is on the way` })
+  } else if (incident.status === 'closed') {
+    steps.push({
+      key: 'end',
+      at: null,
+      text: incident.falseAlarmBy ? `${incident.falseAlarmBy} marked this as a false alarm` : 'No alert was needed',
+    })
+  } else if (isOpen(incident)) {
+    steps.push({ key: 'end', at: null, text: 'The family was alerted. Nobody has answered yet.' })
+  }
+  return steps
+}
+
+const stepTimeFormat = new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' })
+
 function FallRow({
   incident,
+  personName,
+  events,
   names,
   who,
   onGo,
+  onFalseAlarm,
   showAction,
 }: {
   incident: Incident
+  personName: string
+  events: FallEvent[] | undefined
   names: string[]
   who: string | null
   onGo: (incidentId: Id<'incidents'>, name: string) => Promise<void>
+  onFalseAlarm: (incidentId: Id<'incidents'>, name: string) => Promise<void>
   showAction: boolean
 }) {
-  const state = stateOf(incident)
-  const said = spokenWords(incident.transcript)
+  const [open, setOpen] = useState(false)
+  const { kind, title, said } = summarize(incident, personName)
+  const detailId = `fall-${incident._id}`
+
   return (
-    <li className="fall">
-      <p className="fall-when">
+    <li className={open ? 'fall fall-open' : 'fall'}>
+      <button
+        type="button"
+        className="fall-head"
+        aria-expanded={open}
+        aria-controls={detailId}
+        onClick={() => setOpen(!open)}
+      >
+        <span className={`fall-mark fall-mark-${kind}`}>
+          {kind === 'ok' ? <CheckIcon /> : kind === 'alert' ? <AlertIcon /> : <ClockIcon />}
+        </span>
+        <span className="fall-text">
+          <span className="fall-title">{title}</span>
+          <span className="fall-said">{said}</span>
+        </span>
         <time dateTime={new Date(incident.createdAt).toISOString()}>
           {timeFormat.format(incident.createdAt)}
         </time>
-        <span title="Strength of the impact">{incident.impactMaxG.toFixed(1)} g</span>
-      </p>
-      <div className="fall-body">
-        <p className={said ? 'fall-said' : 'fall-said fall-silent'}>
-          {said ? `“${said}”` : 'No answer'}
-        </p>
-        <p className={`fall-state fall-state-${state.kind}`}>
-          {state.kind === 'ok' ? <CheckIcon /> : state.kind === 'alert' ? <AlertIcon /> : <ClockIcon />}
-          <span>{state.text}</span>
-        </p>
-        {showAction && (
-          <OnMyWay compact names={names} who={who} onGo={(name) => onGo(incident._id, name)} />
-        )}
-      </div>
+        <svg className="fall-chevron" viewBox="0 0 20 20" aria-hidden="true">
+          <path d="m6 8 4 4 4-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+
+      {showAction && (
+        <div className="fall-action">
+          <Respond
+            compact
+            names={names}
+            who={who}
+            onGo={(name) => onGo(incident._id, name)}
+            onFalseAlarm={(name) => onFalseAlarm(incident._id, name)}
+          />
+        </div>
+      )}
+
+      {open && (
+        <div id={detailId} className="fall-detail">
+          <h4>What happened</h4>
+          <ol>
+            {stepsOf(incident, personName, events).map((step) => (
+              <li key={step.key}>
+                <span className="step-time">{step.at === null ? '' : stepTimeFormat.format(step.at)}</span>
+                <span>{step.text}</span>
+              </li>
+            ))}
+          </ol>
+          {incident.status === 'acknowledged' && (
+            <Respond
+              compact
+              showGo={false}
+              names={names}
+              who={who}
+              onGo={(name) => onGo(incident._id, name)}
+              onFalseAlarm={(name) => onFalseAlarm(incident._id, name)}
+            />
+          )}
+        </div>
+      )}
     </li>
   )
 }
@@ -399,14 +521,18 @@ const TAB_ORDER: Tab[] = ['new', 'today', 'week']
 // Falls in three views: the ones still waiting for someone, today's, and the last 7 days.
 function History({
   overview,
+  eventsByFall,
   now,
   who,
   onGo,
+  onFalseAlarm,
 }: {
   overview: Overview
+  eventsByFall: Map<string, FallEvent[]>
   now: number
   who: string | null
   onGo: (incidentId: Id<'incidents'>, name: string) => Promise<void>
+  onFalseAlarm: (incidentId: Id<'incidents'>, name: string) => Promise<void>
 }) {
   const { incidents, personName, familyNames } = overview
   const waiting = incidents.filter(isOpen)
@@ -488,9 +614,12 @@ function History({
                   <FallRow
                     key={incident._id}
                     incident={incident}
+                    personName={personName}
+                    events={eventsByFall.get(incident._id)}
                     names={familyNames}
                     who={who}
                     onGo={onGo}
+                    onFalseAlarm={onFalseAlarm}
                     showAction={isOpen(incident) && incident._id !== leading}
                   />
                 ))}
@@ -505,7 +634,10 @@ function History({
 
 function App() {
   const overview = useQuery(api.portal.overview, { deviceId: DEVICE_ID })
+  // The activity feed, for the step-by-step view of each fall.
+  const feed = useQuery(api.events.list, { deviceId: DEVICE_ID, limit: FEED_LIMIT })
   const onMyWay = useMutation(api.portal.onMyWay)
+  const markFalseAlarm = useMutation(api.portal.markFalseAlarm)
   const now = useNow()
   const [who, setWho] = useState<string | null>(readWho)
   const [error, setError] = useState<string | null>(null)
@@ -526,6 +658,15 @@ function App() {
     )
   }
 
+  // Feed rows grouped by fall, oldest step first (the feed arrives newest first).
+  const eventsByFall = new Map<string, FallEvent[]>()
+  for (const event of feed ?? []) {
+    if (!event.incidentId) continue
+    const steps = eventsByFall.get(event.incidentId) ?? []
+    steps.unshift(event)
+    eventsByFall.set(event.incidentId, steps)
+  }
+
   // A remembered name that is no longer in the family does not count.
   const activeWho = who !== null && overview.familyNames.includes(who) ? who : null
 
@@ -541,16 +682,28 @@ function App() {
     }
   }
 
+  const falseAlarm = async (incidentId: Id<'incidents'>, name: string) => {
+    setWho(name)
+    saveWho(name)
+    setError(null)
+    try {
+      const result = await markFalseAlarm({ incidentId, name })
+      if (!result.ok) setError('That did not go through. Tap “It was a false alarm” again.')
+    } catch {
+      setError('No connection. Check your internet and try again.')
+    }
+  }
+
   return (
     <main>
-      <NowPanel overview={overview} now={now} who={activeWho} onGo={go} />
+      <NowPanel overview={overview} now={now} who={activeWho} onGo={go} onFalseAlarm={falseAlarm} />
       <div className="page">
         {error && (
           <p className="error" role="alert">
             {error}
           </p>
         )}
-        <History overview={overview} now={now} who={activeWho} onGo={go} />
+        <History overview={overview} eventsByFall={eventsByFall} now={now} who={activeWho} onGo={go} onFalseAlarm={falseAlarm} />
       </div>
     </main>
   )

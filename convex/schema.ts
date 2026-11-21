@@ -35,6 +35,7 @@ export default defineSchema({
     decision: v.optional(v.any()), // the AI's JSON (CJ-13)
     receipts: v.array(v.string()), // Pushover receipts (CJ-7)
     acknowledgedBy: v.optional(v.string()),
+    falseAlarmBy: v.optional(v.string()), // family member who marked it a false alarm
     createdAt: v.number(), // ms since epoch
   }).index("by_deviceId_and_createdAt", ["deviceId", "createdAt"]),
 

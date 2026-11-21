@@ -162,6 +162,15 @@
   margin-top: 20px;
 }
 
+.go-wrap {
+  display: grid;
+  justify-items: start;
+}
+
+.fall-detail .go-links {
+  margin-top: 10px;
+}
+
 .go {
   width: 100%;
   min-height: 58px;
@@ -197,6 +206,45 @@
 .go:focus-visible,
 .now .text-button:focus-visible {
   outline-color: var(--tone);
+}
+
+/* The quieter answer: an outlined button under the main one. */
+.go-second {
+  width: 100%;
+  min-height: 50px;
+  margin-top: 10px;
+  padding: 0 20px;
+  border: 1.5px solid currentColor;
+  border-radius: 16px;
+  background: none;
+  font-family: var(--round);
+  font-size: 1.05rem;
+  font-weight: 650;
+  cursor: pointer;
+  transition: background-color 160ms ease-out;
+}
+
+.go-second:hover {
+  background: rgb(255 255 255 / 0.45);
+}
+
+.go-second:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.go-cancel {
+  margin-top: 12px;
+}
+
+.go-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 22px;
+}
+
+.go-link-quiet {
+  color: var(--ink-soft);
 }
 
 .go-as {
@@ -326,73 +374,149 @@
   border-bottom: 1px solid var(--line);
 }
 
+/* One fall: a sentence you can open. */
 .fall {
-  display: grid;
-  grid-template-columns: 4.8rem 1fr;
-  gap: 4px 10px;
-  padding: 14px 0;
   border-bottom: 1px solid var(--line);
 }
 
-.fall-when {
+.fall-head {
   display: grid;
-  align-content: start;
-  gap: 2px;
-  padding-top: 2px;
-  font-size: 0.94rem;
-  color: var(--ink-soft);
-  font-variant-numeric: tabular-nums;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 14px 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  cursor: pointer;
 }
 
-.fall-when span {
-  font-size: 0.84rem;
+.fall-mark {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--green-soft);
+  color: var(--green-deep);
+}
+
+.fall-mark svg {
+  width: 18px;
+  height: 18px;
+}
+
+.fall-mark-alert {
+  background: var(--pink);
+  color: var(--pink-deep);
+}
+
+.fall-mark-wait {
+  background: #efedea;
+  color: var(--ink-soft);
+}
+
+.fall-text {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.fall-title {
+  font-size: 1.04rem;
+  font-weight: 620;
 }
 
 .fall-said {
-  font-size: 1.08rem;
-  font-weight: 550;
-  overflow-wrap: anywhere;
-}
-
-.fall-silent {
-  font-weight: 400;
-  color: var(--ink-soft);
-}
-
-.fall-state {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  margin-top: 4px;
   font-size: 0.94rem;
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fall-open .fall-said {
+  white-space: normal;
+}
+
+.fall-head time {
+  font-size: 0.9rem;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.fall-chevron {
+  width: 20px;
+  height: 20px;
+  color: var(--ink-soft);
+  transition: transform 220ms var(--ease-out);
+}
+
+.fall-open .fall-chevron {
+  transform: rotate(180deg);
+}
+
+.fall-head:hover .fall-title {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1.5px;
+}
+
+.fall-action {
+  padding: 0 0 14px 46px;
+}
+
+/* Step by step, lined up under the sentence. */
+.fall-detail {
+  padding: 2px 0 18px 46px;
+}
+
+.fall-detail h4 {
+  margin: 0 0 8px;
+  font-size: 0.88rem;
   font-weight: 600;
   color: var(--ink-soft);
 }
 
-.fall-state svg {
-  width: 17px;
-  height: 17px;
-  margin-top: 3px;
-  flex: none;
+.fall-detail ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
 }
 
-.fall-state-ok {
-  color: var(--green-deep);
+.fall-detail li {
+  display: grid;
+  grid-template-columns: 6.4rem 1fr;
+  gap: 10px;
+  font-size: 0.96rem;
+  overflow-wrap: anywhere;
 }
 
-.fall-state-alert {
-  color: var(--pink-deep);
-}
-
-.fall-impact {
-  margin-left: auto;
-  font-weight: 400;
+.step-time {
   color: var(--ink-soft);
+  font-size: 0.88rem;
+  padding-top: 1px;
   font-variant-numeric: tabular-nums;
 }
 
+@media (prefers-reduced-motion: no-preference) {
+  .fall-detail {
+    animation: fall-detail-in 240ms var(--ease-out);
+  }
+
+  @keyframes fall-detail-in {
+    from {
+      opacity: 0;
+      transform: translateY(-4px);
+    }
+  }
+}
+
 .go-link {
-  margin-top: 8px;
   min-height: 40px;
   color: var(--pink-deep);
 }
@@ -483,7 +607,8 @@
     font-size: 1.15rem;
   }
 
-  .go {
+  .go,
+  .go-second {
     max-width: 340px;
   }
 
@@ -503,31 +628,7 @@
     font-size: 1.7rem;
   }
 
-  .fall {
-    grid-template-columns: 6rem 1fr;
-    padding: 18px 0;
-  }
-
-  /* What she said on the left, what happened on the right. */
-  .fall-body {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    align-items: baseline;
-    gap: 6px 28px;
-  }
-
-  .fall-said {
-    font-size: 1.15rem;
-  }
-
-  .fall-state {
-    margin-top: 0;
-    white-space: nowrap;
-  }
-
-  .fall-body .go-link,
-  .fall-body .go-who-compact {
-    grid-column: 1 / -1;
-    justify-self: start;
+  .fall-head {
+    padding: 16px 0;
   }
 }

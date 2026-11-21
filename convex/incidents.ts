@@ -439,3 +439,32 @@ export async function acknowledgeIncident(
   });
   return { alreadyHandled: false };
 }
+
+// The portal's "False alarm" button (portal.markFalseAlarm). Closes the incident from
+// any open or acknowledged status, stops the repeating alerts and tells the watch.
+// Already closed: nothing to do.
+export async function markIncidentFalseAlarm(
+  ctx: MutationCtx,
+  incident: Doc<"incidents">,
+  name: string,
+): Promise<void> {
+  if (incident.status === "closed") return;
+  await ctx.db.patch("incidents", incident._id, { status: "closed", falseAlarmBy: name });
+  await logEvent(ctx, {
+    deviceId: incident.deviceId,
+    incidentId: incident._id,
+    type: "incident_closed",
+    text: `${name} marked this as a false alarm`,
+    level: "info",
+  });
+  await ctx.scheduler.runAfter(0, internal.notify.cancelReceipts, {
+    incidentId: incident._id,
+    receipts: incident.receipts,
+  });
+  await ctx.scheduler.runAfter(0, internal.talk.say, {
+    deviceId: incident.deviceId,
+    incidentId: incident._id,
+    text: "It was a false alarm. Everything is OK.",
+    askAgain: false,
+  });
+}
