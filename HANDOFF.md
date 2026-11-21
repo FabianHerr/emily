@@ -39,7 +39,13 @@ Un **reloj** que detecta cuando un adulto mayor se cae, le pregunta en voz alta 
 - **Acelerómetro: BMA423** (lo dice la caja). Interrupt IO14, SDA IO10, SCL IO11.
 - **Equipo de 2:** sí podemos competir siendo dos.
 - **Hardware propio:** las reglas no lo prohíben.
-- **Repo:** `codeJam`, creado vacío en la Mac de Fabian (solo `git init`; todavía no está en GitHub).
+- **Repo:** https://github.com/FabianHerr/emily (privado). En la Mac de Fabian la carpeta se llama `repos/codeJam`. Ya tiene la app base (Vite + React + TypeScript) conectada a Convex.
+- **Convex:** proyecto `emily` en el equipo `emily-codejam` (cuenta personal de Fabian), región US East. Deployment de desarrollo de Fabian: `healthy-lark-748`.
+  - Rutas HTTP del reloj (`CONVEX_SITE_URL`): `https://healthy-lark-748.convex.site`
+  - Cliente web: `https://healthy-lark-748.convex.cloud`
+  - Panel: https://dashboard.convex.dev/d/healthy-lark-748
+  - Ojo: si Sebastian corre `npx convex dev` con su cuenta, obtiene OTRO deployment con otra URL. El reloj debe apuntar al de Fabian.
+- **Guías de Convex para IA:** antes de escribir código en `convex/`, leer `convex/_generated/ai/guidelines.md` (lo pide `CLAUDE.md`).
 
 **Hardware del reloj (caja + pantalla de información del firmware de fábrica):**
 
@@ -74,6 +80,7 @@ Un **reloj** que detecta cuando un adulto mayor se cae, le pregunta en voz alta 
 | Decisión | Un modelo de IA que devuelve JSON | **Por elegir** |
 | Aviso a la familia | Pushover | Suena en silencio, se repite hasta confirmar, tiene callback |
 | Convex → reloj | Polling | El reloj no tiene dirección pública; sin servicios extra |
+| Nombre | **Emily**: el proyecto, el repo (`FabianHerr/emily`) y la voz del reloj, que se presenta así: "Hi Rosa, it's Emily. Are you OK?" | Decidido por Fabian el 20 nov |
 | Idioma de la app | **Inglés** en todo: voz, pantalla del reloj, avisos, portal, y nombres en el código (campos, tablas, archivos) | Se presenta en inglés. Decidido el 20 nov. Estos documentos y el tablero siguen en español |
 
 **Descartado, no volver a proponer:** app de iPhone, Apple Watch, Twilio, cámaras, Raspberry Pi, mandar el acelerómetro crudo a Convex.
@@ -128,7 +135,7 @@ AI Service llama a Notify Family y a Talk to Loved One **en paralelo**: el aviso
 ```
 `level`: `none` | `precautionary` | `emergency`. El mensaje a la familia cita lo que la persona dijo, **sin diagnósticos**.
 
-**Rutas HTTP (HTTP actions de Convex en `https://<deployment>.convex.site`). El reloj siempre inicia.**
+**Rutas HTTP (HTTP actions de Convex en `https://healthy-lark-748.convex.site`). El reloj siempre inicia.**
 
 | Ruta | Quién llama | Envía | Recibe |
 |---|---|---|---|
