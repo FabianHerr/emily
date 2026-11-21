@@ -77,7 +77,7 @@ Un **reloj** que detecta cuando un adulto mayor se cae, le pregunta en voz alta 
 | Backend y app web | Convex | Todo centralizado y en tiempo real |
 | Voz a texto | ElevenLabs Scribe v2 | Debe entender voces débiles o roncas |
 | Texto a voz | ElevenLabs Flash v2.5 | Rápido |
-| Decisión | Un modelo de IA que devuelve JSON | **Por elegir** |
+| Decisión (IA) | **Claude Sonnet 5.5** (`claude-sonnet-5-5`) devuelve el JSON. Respaldo: **Google Gemini** `gemini-3.5-flash-lite`. Plan C: reglas de palabras clave | Decidido por Fabian el 21 nov (CJ-12). Sonnet: más criterio que Haiku y más rápido que Opus. Gemini: otro proveedor, modelo rápido y con nivel gratis |
 | Aviso a la familia | Pushover | Suena en silencio, se repite hasta confirmar, tiene callback |
 | Convex → reloj | Polling | El reloj no tiene dirección pública; sin servicios extra |
 | Nombre | **Emily**: el proyecto, el repo (`FabianHerr/emily`) y la voz del reloj, que se presenta así: "Hi Rosa, it's Emily. Are you OK?" | Decidido por Fabian el 20 nov |
@@ -293,7 +293,16 @@ No usar SisFall ni KFall: son de cintura.
 
 **ElevenLabs en el código (20 nov):** `convex/elevenlabs.ts` tiene dos internal actions, `transcribe({ audioId })` y `speak({ text })`, hechas con el SDK oficial `@elevenlabs/elevenlabs-js`. El archivo usa `"use node"` porque el SDK no funciona en el runtime normal de Convex. Ninguna de las dos lanza errores: si algo falla o se pasa del tiempo (4 s y 3 s), devuelven `null`. La clave está en Convex (`ELEVENLABS_API_KEY`); falta `ELEVENLABS_VOICE_ID` (CJ-12), y sin ella `speak` devuelve `null`. **Todavía no se han probado contra la API real** (no se ha gastado ningún crédito).
 
+**Modelo de IA, datos verificados el 21 nov (para CJ-13 y CJ-19):**
+- Principal: `claude-sonnet-5-5` con el SDK oficial `@anthropic-ai/sdk` (no usar `fetch` directo). Clave en Convex: `ANTHROPIC_API_KEY`. Precio: $2 / $10 por millón de tokens, unos $0.002 por caída.
+- Para que responda JSON válido: salida estructurada con `output_config: { format: ... }` (o `client.messages.parse()`). NO usar `tool_choice` forzado (`any` / `tool`): en este modelo da error 400. No se puede "rellenar" la respuesta del asistente.
+- Velocidad: este modelo piensa por defecto. Para la meta de 2.5 s, empezar con `output_config: { effort: "low" }`; si sigue lento, `thinking: { type: "between_tools" }` (solo con effort `high` o menor). `thinking: { type: "disabled" }` da error 400. No enviar `temperature`.
+- Revisar siempre `stop_reason`: si es `"refusal"` no hay JSON; tratarlo como fallo y pasar al respaldo.
+- Respaldo: Gemini `gemini-3.5-flash-lite` (estable; Google lo describe como el más rápido y económico de la serie 3.5; gratis en el nivel gratuito, $0.30 / $2.50 por millón en el de pago). Clave en Convex: `GEMINI_API_KEY`. La documentación actual de Google usa la "Interactions API": `POST https://generativelanguage.googleapis.com/v1beta/interactions`, cabeceras `x-goog-api-key` y `Api-Revision: 2026-05-20`, cuerpo con `model`, `input` y `response_format: { type: "text", mime_type: "application/json", schema }`. **Sin confirmar:** la forma exacta de la respuesta y los límites del nivel gratuito; leer la doc antes de programarlo.
+- Voz de Emily: la elige Fabian en ElevenLabs y guarda su id en `ELEVENLABS_VOICE_ID`.
+
 **Sigue por verificar:**
+- Segundos reales de respuesta de Sonnet 5.5 y de Gemini con el JSON de ejemplo (medir en CJ-13; meta 2.5 s).
 - Cuánto tarda el arranque en frío de las actions de Node en Convex (puede sumar al tiempo de respuesta; medir en CJ-18).
 - Tiempos reales de cada paso, volumen del parlante, y si Scribe entiende una voz débil grabada con el reloj.
 - Umbral de "golpe fuerte" (inicio: > 3 g).
@@ -304,6 +313,7 @@ Cosas que ya sabemos y que es fácil pasar por alto. Cada una dice en qué tarea
 
 | # | Qué | Cuándo se resuelve |
 |---|---|---|
+| 0 | **Faltan dos claves de IA en Convex:** `ANTHROPIC_API_KEY` (Claude) y `GEMINI_API_KEY` (respaldo, se crea en Google AI Studio). Las guarda Fabian con `npx convex env set`. | CJ-12 |
 | 1 | **Falta `ELEVENLABS_VOICE_ID` en Convex.** Sin ella `speak` devuelve `null` y el reloj solo muestra texto. Elegir una voz y guardarla con `npx convex env set ELEVENLABS_VOICE_ID <id>`. | CJ-12 |
 | 2 | **`convex/elevenlabs.ts` nunca se ha probado contra la API real.** Compila y está desplegado, nada más. La primera prueba real gasta créditos: hacerla una vez, con intención, y mirar cuánto bajó el contador. | CJ-13 y CJ-14 |
 | 3 | **El módulo usa el SDK en modo Node (`"use node"`).** Puede tardar más en arrancar en frío. Medirlo; si suma más de ~1 s, cambiar a llamadas `fetch` directas (los datos de la API están en la sección 12). | CJ-18 |
