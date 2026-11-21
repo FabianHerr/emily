@@ -278,6 +278,25 @@ No usar SisFall ni KFall: son de cintura.
 - Tiempos reales de cada paso, volumen del parlante, y si Scribe entiende una voz débil grabada con el reloj.
 - Umbral de "golpe fuerte" (inicio: > 3 g).
 
+## 12b. Para no olvidar
+
+Cosas que ya sabemos y que es fácil pasar por alto. Cada una dice en qué tarea toca resolverla.
+
+| # | Qué | Cuándo se resuelve |
+|---|---|---|
+| 1 | **Falta `ELEVENLABS_VOICE_ID` en Convex.** Sin ella `speak` devuelve `null` y el reloj solo muestra texto. Elegir una voz y guardarla con `npx convex env set ELEVENLABS_VOICE_ID <id>`. | CJ-12 |
+| 2 | **`convex/elevenlabs.ts` nunca se ha probado contra la API real.** Compila y está desplegado, nada más. La primera prueba real gasta créditos: hacerla una vez, con intención, y mirar cuánto bajó el contador. | CJ-13 y CJ-14 |
+| 3 | **El módulo usa el SDK en modo Node (`"use node"`).** Puede tardar más en arrancar en frío. Medirlo; si suma más de ~1 s, cambiar a llamadas `fetch` directas (los datos de la API están en la sección 12). | CJ-18 |
+| 4 | **CJ-13 y CJ-14 deben usar `transcribe` y `speak` de `convex/elevenlabs.ts`.** No escribir otra vez las llamadas a ElevenLabs. Las especificaciones del tablero describen la llamada web directa; lo que vale es el módulo. | CJ-13 y CJ-14 |
+| 5 | **Créditos de ElevenLabs: ~8,600 al 20 nov.** Una caída completa gasta unos 150 (peor caso). No probar la voz en bucle; guardar unos 3,000 para el domingo. Mirar en la cuenta cuándo se renuevan. | Todo el fin de semana |
+| 6 | **Fabian debe generar dos audios** con la voz elegida y pasárselos a Sebastian: "Hi Rosa, it's Emily. Are you OK?" y "Rosa, it's Emily again. Are you OK?". El nombre "Rosa" queda grabado en el audio. | CJ-10 (después de CJ-12) |
+| 7 | **La clave de ElevenLabs tiene permisos amplios** (se autorizó la lista completa: clonar voces, doblaje, etc.). Termina en `8e98`. Borrarla en la cuenta de ElevenLabs después del hackathon. | Domingo, después de los jueces |
+| 8 | **La clave de ElevenLabs está en dos sitios:** `.env.local` (Mac de Fabian, ignorado por git) y Convex. El backend usa la de Convex. Si se cambia la clave, hay que actualizar las dos. | Solo si se cambia |
+| 9 | **Falta `PUSHOVER_APP_TOKEN` en Convex.** Es lo último de CJ-3 y lo necesita CJ-7. | CJ-3 |
+| 10 | **Sebastian no corre `npx convex dev`.** Crearía otro backend con otra URL. El reloj apunta a `https://healthy-lark-748.convex.site`. | Siempre |
+| 11 | **Tablero: no guardar una tarea con el panel abierto desde hace rato.** Si otro (o Claude) la editó mientras tanto, "Guardar" pisa esos cambios con la copia vieja. Cerrar y volver a abrir antes de editar. | Siempre |
+| 12 | **El paso "cargar la clave por Vite" del asistente de ElevenLabs se omitió a propósito.** La clave no debe llegar al navegador; vive en Convex. Si `onboard check` lo vuelve a pedir, ignorarlo. | — |
+
 ## 13. Tareas del sprint (kanban)
 
 **Tablero en vivo (fuente de verdad):** https://claude.ai/artifact/MNWCwnhqiiRGp8ERtAke7i
