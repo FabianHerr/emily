@@ -317,6 +317,16 @@ Cosas que ya sabemos y que es fácil pasar por alto. Cada una dice en qué tarea
 | 11 | **Tablero: no guardar una tarea con el panel abierto desde hace rato.** Si otro (o Claude) la editó mientras tanto, "Guardar" pisa esos cambios con la copia vieja. Cerrar y volver a abrir antes de editar. | Siempre |
 | 12 | **El paso "cargar la clave por Vite" del asistente de ElevenLabs se omitió a propósito.** La clave no debe llegar al navegador; vive en Convex. Si `onboard check` lo vuelve a pedir, ignorarlo. | — |
 
+## 12c. Mediciones
+
+| Qué | Medido | Cuándo | Meta |
+|---|---|---|---|
+| `POST /fall` responde (Convex guarda el incidente) | 0.29 s | 21 nov, con `curl` desde la Mac | — |
+| Pushover acepta los dos avisos y se guardan los recibos | menos de 1.6 s desde el envío | 21 nov | — |
+| Suena el teléfono de Fabian (iPhone, Critical Alerts) | menos de 2 s desde el envío | 21 nov, medido a ojo | menos de 10 s |
+
+Falta medir: desde la caída real del reloj (CJ-9), y los pasos de voz e IA (CJ-18).
+
 ## 13. Tareas del sprint (kanban)
 
 **Tablero en vivo (fuente de verdad):** https://claude.ai/artifact/MNWCwnhqiiRGp8ERtAke7i
