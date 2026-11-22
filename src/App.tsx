@@ -311,6 +311,52 @@ function Respond({
   )
 }
 
+// Roughly the height of the short bar: it appears when the big panel is above this line.
+const MINI_BAR_PX = 72
+
+// On a phone the big panel scrolls away. This short bar slides in at the top once it
+// has, so Emily and her state stay in view; tapping it goes back up. The desktop
+// layout keeps the whole panel fixed, so the bar is hidden there (App.css).
+function MiniState({
+  mood,
+  headline,
+  heroRef,
+}: {
+  mood: Mood
+  headline: string
+  heroRef: React.RefObject<HTMLElement | null>
+}) {
+  const [shown, setShown] = useState(false)
+  useEffect(() => {
+    const hero = heroRef.current
+    if (!hero) return
+    // Shown once the big panel has scrolled up past the height of this bar.
+    const update = () => setShown(hero.getBoundingClientRect().bottom < MINI_BAR_PX)
+    update()
+    window.addEventListener('scroll', update, { passive: true })
+    window.addEventListener('resize', update)
+    return () => {
+      window.removeEventListener('scroll', update)
+      window.removeEventListener('resize', update)
+    }
+  }, [heroRef])
+
+  return (
+    <button
+      type="button"
+      className={`mini mini-${mood}${shown ? ' mini-on' : ''}`}
+      // The big panel already announces changes; this is the same text again.
+      aria-hidden={!shown}
+      tabIndex={shown ? 0 : -1}
+      aria-label={`${headline}. Back to top`}
+      onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+    >
+      <EmilyCloud mood={mood} />
+      <span>{headline}</span>
+    </button>
+  )
+}
+
 // The top of the page answers one question: is she OK right now?
 function NowPanel({
   overview,
@@ -376,12 +422,15 @@ function NowPanel({
     detail = `Emily cannot reach ${personName}’s watch. It may be off or out of Wi-Fi.`
   }
 
+  const heroRef = useRef<HTMLElement>(null)
   const watchLine = never
     ? null
     : `Watch seen ${formatAgo(lastHeartbeat, now)}${battery !== null ? ` · battery ${Math.round(battery)}%` : ''}`
 
   return (
-    <section className={`now now-${mood}`} aria-live="polite">
+    <>
+    <MiniState mood={mood} headline={headline} heroRef={heroRef} />
+    <section ref={heroRef} className={`now now-${mood}`} aria-live="polite">
       <div className="now-inner">
         <div className="brand">
           <EmilyCloud mood={mood} />
@@ -405,6 +454,7 @@ function NowPanel({
         {watchLine && <p className="now-watch">{watchLine}</p>}
       </div>
     </section>
+    </>
   )
 }
 

@@ -75,6 +75,67 @@
   opacity: 0.82;
 }
 
+/* ---------- The short bar that follows you down the page (phones) ---------- */
+
+.mini {
+  position: fixed;
+  inset: 0 0 auto 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: calc(8px + env(safe-area-inset-top)) 18px 10px;
+  border: 0;
+  border-radius: 0 0 22px 22px;
+  background: var(--calm);
+  color: var(--calm-deep);
+  font-family: var(--round);
+  font-size: 1.08rem;
+  font-weight: 750;
+  line-height: 1.2;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 0 10px 22px -14px rgb(22 50 74 / 0.55);
+  transform: translateY(-110%);
+  visibility: hidden;
+  transition: transform 280ms var(--ease-out), visibility 0s linear 280ms,
+    background-color 600ms var(--ease-out), color 600ms var(--ease-out);
+}
+
+.mini-on {
+  transform: none;
+  visibility: visible;
+  transition: transform 280ms var(--ease-out), visibility 0s,
+    background-color 600ms var(--ease-out), color 600ms var(--ease-out);
+}
+
+.mini-alert {
+  background: var(--alert);
+  color: var(--alert-deep);
+}
+
+.mini-plain {
+  background: var(--calm-soft);
+  color: var(--ink);
+}
+
+.mini .emily {
+  width: 46px;
+}
+
+.mini span {
+  min-width: 0;
+  text-wrap: balance;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mini,
+  .mini-on {
+    transition: none;
+  }
+}
+
 /* ---------- Emily ---------- */
 
 .emily {
@@ -716,6 +777,11 @@
    scrolls on the right. ---------- */
 
 @media (min-width: 980px) {
+  /* The whole panel stays fixed here, so the short bar is not needed. */
+  .mini {
+    display: none;
+  }
+
   main {
     display: grid;
     grid-template-columns: minmax(400px, 42%) 1fr;
