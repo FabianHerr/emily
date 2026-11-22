@@ -33,3 +33,4 @@ ml/data/
 ml/.venv/
 __pycache__/
 *.wav
+ml/model.joblib

@@ -280,7 +280,7 @@ Cada familiar instala la app Pushover y activa "Critical Alerts". Prueba gratis 
 
 **Detección:**
 1. **Portero (umbrales):** leer a 50 Hz; solo un golpe fuerte despierta al modelo. Valores de partida de la literatura: caída libre < 0,75 g, golpe > 2 g, máx. 500 ms entre ambos, quietud ~5 s. La caída libre **suma, no es obligatoria**.
-2. **Juez (Random Forest):** decide si fue caída. Solo acelerómetro, 20 Hz, sobre la **magnitud** √(x²+y²+z²). Rango del sensor: ±8 g.
+2. **Juez (Random Forest):** decide si fue caída. Solo acelerómetro, **50 Hz**, cada eje limitado a ±8 g. Mira desde 1 s antes hasta 3 s después del golpe y da un puntaje; por encima de 0.37 es caída. Detalle en la sección 11 y en `ml/README.md`.
 
 **Trampas conocidas:**
 - WiFi solo 2.4 GHz y eduroam es difícil → **usar el hotspot de un celular**.
@@ -291,22 +291,24 @@ Cada familiar instala la app Pushover y activa "Critical Alerts". Prueba gratis 
 - HTTPS obligatorio hacia Convex: `WiFiClientSecure` (para la demo vale `setInsecure()`).
 - Audio en PSRAM con `ps_malloc()`.
 
-## 11. Entrenar el Random Forest
+## 11. El Random Forest (entrenado el 22 nov, CJ-21)
 
-| Base de datos (muñeca) | Dónde |
+**Hecho.** Todo está en `ml/` y explicado en `ml/README.md`. Lo que va al reloj está en `ml/watch_model/`.
+
+| Dato | Valor |
 |---|---|
-| WEDA-FALL (Fitbit, 50 Hz, incluye adultos mayores) | https://github.com/joaojtmarques/WEDA-FALL |
-| Nandi et al. (41 personas, 20 Hz) | https://doi.org/10.5281/zenodo.10013090 |
-| UMAFall (muñeca derecha, 20 Hz; licencia no comercial) | https://figshare.com/articles/dataset/UMA_ADL_FALL_Dataset_zip/4214283 |
+| Datos | WEDA-FALL (Fitbit) + FallAllD (registrador de muñeca, ±8 g): 870 caídas de 23 personas y 1.371 actividades normales |
+| Modelo | 20 árboles, profundidad 8, exportado a C con **emlearn** (micromlgen no sirve: solo da sí/no) |
+| Entrada | 9 números por golpe, a 50 Hz, desde 1 s antes hasta 3 s después |
+| Salida | Puntaje de 0 a 1. Caída si pasa de **0.37** (`FALL_SCORE_THRESHOLD`) |
+| Resultado con personas no vistas | Detecta 776 de 870 caídas (89 %); llama caída a 205 de 1.371 movimientos normales fuertes (15 %) |
 
-```
-1. Quedarse solo con el acelerómetro de la muñeca; convertir a g; llevar todo a 20 Hz
-2. Ventanas de ~2 s alrededor de cada golpe
-3. Features: máximo, mínimo, promedio, varianza de la magnitud; cambio de orientación
-4. scikit-learn RandomForestClassifier
-5. Convertir a C++ con micromlgen (o emlearn) y pegarlo en el código del reloj
-6. Probar con caídas propias sobre un colchón
-```
+- Ajuste 89 % / 15 % elegido por Fabian: una falsa alarma solo hace que Emily pregunte, no avisa a la familia.
+- Lo que más lo engaña: golpear una mesa, saltar, aplaudir. Lo que más se le escapa: caídas suaves (rodar de la cama).
+- **Nunca se probó con nuestro reloj.** Todas las caídas de los datos son actuadas por adultos jóvenes.
+- **Cambio propuesto para CJ-22 (acordar entre Fabian y Sebastian):** NO usar la regla "preguntar siempre si el golpe pasa de 3 g". Medido: esa regla detecta 96 % pero pregunta en 62 % de los movimientos normales, y anula al modelo. Usar solo el puntaje.
+- Descartados tras investigar (informe en `reports/`, sin subir): Nandi/BITS-2 y UMAFall van a 20 Hz y se pierde el pico del golpe. La licencia de UMAFall es CC BY 4.0, no "no comercial".
+
 No usar SisFall ni KFall: son de cintura.
 
 ## 12. Por verificar (no lo confirmé)
