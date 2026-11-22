@@ -486,6 +486,17 @@ function NowPanel({
   )
 }
 
+// Emily's level for a fall, in words.
+function levelOf(incident: Incident): string {
+  if (incident.superseded) return 'Replaced by a newer fall'
+  if (incident.falseAlarmBy) return 'False alarm'
+  if (incident.level === 'emergency' || incident.status === 'emergency') return 'Emergency'
+  if (incident.status === 'acknowledged') return 'Emergency'
+  if (incident.status === 'precautionary') return 'Possible fall'
+  if (incident.status === 'asking') return 'Checking'
+  return 'No emergency'
+}
+
 type FallEvent = { _id: string; createdAt: number; text: string; level: 'info' | 'precautionary' | 'emergency' }
 type Step = { key: string; at: number | null; text: string }
 
@@ -568,73 +579,95 @@ function FallRow({
   onRemove: (() => void) | null
 }) {
   const [open, setOpen] = useState(false)
-  const { kind, title, said } = summarize(incident, personName)
+  const { kind, title } = summarize(incident, personName)
   const detailId = `fall-${incident._id}`
+  const words = spokenWords(incident.transcript)
+  const level = levelOf(incident)
 
+  // One message from Emily: how serious, how sure, what she heard, how it ended.
   return (
-    <li className={open ? 'fall fall-open' : 'fall'}>
-      <button
-        type="button"
-        className="fall-head"
-        aria-expanded={open}
-        aria-controls={detailId}
-        onClick={() => setOpen(!open)}
-      >
-        <span className={`fall-mark fall-mark-${kind}`}>
-          {kind === 'ok' ? <CheckIcon /> : kind === 'alert' ? <AlertIcon /> : <ClockIcon />}
-        </span>
-        <span className="fall-text">
-          <span className="fall-title">{title}</span>
-          <span className="fall-said">{said}</span>
-        </span>
-        <time dateTime={new Date(incident.createdAt).toISOString()}>
-          {timeFormat.format(incident.createdAt)}
-        </time>
-        <svg className="fall-chevron" viewBox="0 0 20 20" aria-hidden="true">
-          <path d="m6 8 4 4 4-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    <li className={`msg msg-${kind}`}>
+      <span className="msg-avatar" aria-hidden="true">
+        <svg viewBox="0 0 200 160">
+          <path d="M50 152C22 152 6 126 17 100c6-14 13-22 13-38 0-22 18-35 37-32C76 11 102 3 124 16c9 5 14 12 27 12 22 0 36 18 32 38-2 12 6 22 10 37 7 27-11 49-37 49Z" />
         </svg>
-      </button>
+      </span>
+      <div className="msg-bubble">
+        <p className="msg-meta">
+          <span>Emily</span>
+          <time dateTime={new Date(incident.createdAt).toISOString()}>
+            {timeFormat.format(incident.createdAt)}
+          </time>
+        </p>
+        <p className="msg-level">
+          {kind === 'ok' ? <CheckIcon /> : kind === 'alert' ? <AlertIcon /> : <ClockIcon />}
+          {level}
+        </p>
+        <dl className="msg-facts">
+          <div>
+            <dt>How sure</dt>
+            <dd>{incident.confidence === null ? 'Fixed rule, no rating' : `${Math.round(incident.confidence * 100)}%`}</dd>
+          </div>
+          <div>
+            <dt>{personName} said</dt>
+            <dd>{words ? `“${words}”` : 'Nothing'}</dd>
+          </div>
+          <div>
+            <dt>Now</dt>
+            <dd>{title}</dd>
+          </div>
+        </dl>
+        <button
+          type="button"
+          className="text-button msg-more"
+          aria-expanded={open}
+          aria-controls={detailId}
+          onClick={() => setOpen(!open)}
+        >
+          {open ? 'Hide details' : 'Details'}
+        </button>
 
-      {showAction && (
-        <div className="fall-action">
-          <Respond
-            compact
-            names={names}
-            who={who}
-            onGo={(name) => onGo(incident._id, name)}
-            onFalseAlarm={(name) => onFalseAlarm(incident._id, name)}
-          />
-        </div>
-      )}
-
-      {open && (
-        <div id={detailId} className="fall-detail">
-          <h4>What happened</h4>
-          <ol>
-            {stepsOf(incident, personName, events).map((step) => (
-              <li key={step.key}>
-                <span className="step-time">{step.at === null ? '' : stepTimeFormat.format(step.at)}</span>
-                <span>{step.text}</span>
-              </li>
-            ))}
-          </ol>
-          {onRemove && (
-            <button type="button" className="text-button fall-remove" onClick={onRemove}>
-              Remove from list
-            </button>
-          )}
-          {incident.status === 'acknowledged' && (
+        {showAction && (
+          <div className="fall-action">
             <Respond
               compact
-              showGo={false}
               names={names}
               who={who}
               onGo={(name) => onGo(incident._id, name)}
               onFalseAlarm={(name) => onFalseAlarm(incident._id, name)}
             />
-          )}
-        </div>
-      )}
+          </div>
+        )}
+
+        {open && (
+          <div id={detailId} className="fall-detail">
+            <h4>What happened</h4>
+            <ol>
+              {stepsOf(incident, personName, events).map((step) => (
+                <li key={step.key}>
+                  <span className="step-time">{step.at === null ? '' : stepTimeFormat.format(step.at)}</span>
+                  <span>{step.text}</span>
+                </li>
+              ))}
+            </ol>
+            {onRemove && (
+              <button type="button" className="text-button fall-remove" onClick={onRemove}>
+                Remove from list
+              </button>
+            )}
+            {incident.status === 'acknowledged' && (
+              <Respond
+                compact
+                showGo={false}
+                names={names}
+                who={who}
+                onGo={(name) => onGo(incident._id, name)}
+                onFalseAlarm={(name) => onFalseAlarm(incident._id, name)}
+              />
+            )}
+          </div>
+        )}
+      </div>
     </li>
   )
 }
@@ -737,7 +770,7 @@ function History({
   return (
     <section className="history">
       <div className="history-head">
-        <h2>Falls</h2>
+        <h2>Messages from Emily</h2>
         {incidents.length > waiting.length && (
           <button type="button" className="text-button" onClick={() => clearList(Date.now())}>
             Clear list

@@ -57,7 +57,7 @@ The HTTP routes and field names in HANDOFF.md section 6 (and in tasks CJ-6 and C
 - Put tunable numbers (thresholds, timeouts) as named constants at the top of the file.
 - When you learn something the other person needs (a measured time, an API quirk, a decision), write it in HANDOFF.md in the same commit.
 - All code is written from scratch during the hackathon. Do not copy code from earlier projects.
-- Hackathon deadline: Sunday Nov 22, 12:00 PM. Code freeze Sunday 11:30 AM (moved from 8:00 AM by Fabian on Sunday morning). Prefer a working simple version now over a better one later.
+- Hackathon deadline: Sunday Nov 22, 12:00 PM. Code freeze Sunday 11:50 AM (moved twice by Fabian on Sunday morning: 8:00, then 11:30). Prefer a working simple version now over a better one later.
 
 <!-- convex-ai-start -->
 

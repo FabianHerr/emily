@@ -559,6 +559,121 @@
   padding: 0 0 14px 46px;
 }
 
+/* ---------- Messages from Emily: each fall is a chat bubble ---------- */
+
+.msg {
+  display: grid;
+  grid-template-columns: 38px 1fr;
+  gap: 10px;
+  padding: 14px 0 4px;
+}
+
+.msg-avatar {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: var(--calm);
+}
+
+.msg-avatar svg {
+  width: 24px;
+  fill: #fff;
+}
+
+.msg-bubble {
+  min-width: 0;
+  padding: 12px 16px 10px;
+  border-radius: 6px 22px 22px 22px;
+  background: var(--calm-soft);
+}
+
+.msg-alert .msg-bubble {
+  background: var(--alert-soft);
+}
+
+.msg-alert .msg-avatar {
+  background: var(--alert);
+}
+
+.msg-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.84rem;
+  color: var(--ink-soft);
+}
+
+.msg-meta span {
+  font-weight: 650;
+}
+
+.msg-meta time {
+  font-variant-numeric: tabular-nums;
+}
+
+.msg-level {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 4px;
+  font-family: var(--round);
+  font-size: 1.15rem;
+  font-weight: 750;
+  color: var(--calm-deep);
+}
+
+.msg-alert .msg-level {
+  color: var(--alert-deep);
+}
+
+.msg-wait .msg-level {
+  color: var(--ink-soft);
+}
+
+.msg-level svg {
+  width: 19px;
+  height: 19px;
+  flex: none;
+}
+
+.msg-facts {
+  display: grid;
+  gap: 4px;
+  margin: 8px 0 0;
+}
+
+.msg-facts div {
+  display: grid;
+  grid-template-columns: 6.2rem 1fr;
+  gap: 10px;
+  font-size: 0.96rem;
+}
+
+.msg-facts dt {
+  color: var(--ink-soft);
+}
+
+.msg-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.msg-more {
+  min-height: 40px;
+  margin-top: 4px;
+  color: var(--ink-soft);
+}
+
+.msg .fall-action {
+  padding: 6px 0 4px;
+}
+
+.msg .fall-detail {
+  padding: 6px 0 8px;
+}
+
 /* Step by step, lined up under the sentence. */
 .fall-detail {
   padding: 2px 0 18px 46px;

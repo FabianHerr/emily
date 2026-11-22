@@ -27,12 +27,20 @@ type DecisionLevel = (typeof DECISION_LEVELS)[number];
 function readDecision(decision: unknown): {
   level: DecisionLevel | null;
   familySummary: string | null;
+  confidence: number | null;
 } {
   if (typeof decision !== "object" || decision === null) {
-    return { level: null, familySummary: null };
+    return { level: null, familySummary: null, confidence: null };
   }
-  const { level, family_summary } = decision as Record<string, unknown>;
+  const { level, family_summary, confidence, source } = decision as Record<string, unknown>;
   return {
+    // Only an AI decision carries a real confidence; the fixed rules report 0.
+    confidence:
+      (source === "claude" || source === "gemini") &&
+      typeof confidence === "number" &&
+      Number.isFinite(confidence)
+        ? Math.min(1, Math.max(0, confidence))
+        : null,
     level: DECISION_LEVELS.includes(level as DecisionLevel) ? (level as DecisionLevel) : null,
     familySummary:
       typeof family_summary === "string" && family_summary.trim() !== "" ? family_summary : null,
@@ -58,6 +66,8 @@ export const overview = query({
           transcript: v.union(v.string(), v.null()),
           level: v.union(decisionLevelValidator, v.null()),
           familySummary: v.union(v.string(), v.null()),
+          // How sure the AI was of its level, 0 to 1; null when a fixed rule decided.
+          confidence: v.union(v.number(), v.null()),
           acknowledgedBy: v.union(v.string(), v.null()),
           falseAlarmBy: v.union(v.string(), v.null()),
           superseded: v.boolean(),
@@ -103,7 +113,7 @@ export const overview = query({
       // Names only: Pushover keys never leave the backend.
       familyNames: members.map((m) => m.name),
       incidents: incidents.map((i) => {
-        const { level, familySummary } = readDecision(i.decision);
+        const { level, familySummary, confidence } = readDecision(i.decision);
         return {
           _id: i._id,
           createdAt: i.createdAt,
@@ -113,6 +123,7 @@ export const overview = query({
           transcript: i.transcript ?? null,
           level,
           familySummary,
+          confidence,
           acknowledgedBy: i.acknowledgedBy ?? null,
           falseAlarmBy: i.falseAlarmBy ?? null,
           superseded: i.superseded === true,
