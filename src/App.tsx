@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { useAction, useMutation, useQuery } from 'convex/react'
 import { api } from '../convex/_generated/api'
 import type { Id } from '../convex/_generated/dataModel'
@@ -18,6 +18,10 @@ const CLOCK_TICK_MS = 15 * 1000
 // How many recent feed rows to load for the step-by-step view (the backend's maximum).
 const FEED_LIMIT = 200
 const WHO_STORAGE_KEY = 'emily.who'
+// "Clear list" remembers the moment it was pressed, on this device only; nothing is deleted.
+const CLEARED_STORAGE_KEY = 'emily.clearedAt'
+// A list longer than this shows only its newest falls until "Show all" is pressed.
+const SHORT_LIST = 4
 
 type Overview = NonNullable<ReturnType<typeof useQuery<typeof api.portal.overview>>>
 type Incident = Overview['incidents'][number]
@@ -47,6 +51,14 @@ function readWho(): string | null {
     return localStorage.getItem(WHO_STORAGE_KEY)
   } catch {
     return null
+  }
+}
+
+function readClearedAt(): number {
+  try {
+    return Number(localStorage.getItem(CLEARED_STORAGE_KEY)) || 0
+  } catch {
+    return 0
   }
 }
 
@@ -89,6 +101,10 @@ const isOpen = (incident: Incident) =>
 // when something needs attention her brows lift and the smile goes.
 function EmilyCloud({ mood }: { mood: Mood }) {
   const svgRef = useRef<SVGSVGElement>(null)
+  // Emily is drawn twice on phones (panel and short bar). Each drawing needs its own
+  // ids: a shared id points at the first copy, and when that copy is hidden the
+  // gradients vanish and she loses her body and eyes.
+  const uid = useId().replace(/:/g, '')
 
   // Her eyes follow the pointer (mouse, pen or finger). Set as CSS variables so React
   // does not re-render on every move.
@@ -121,26 +137,26 @@ function EmilyCloud({ mood }: { mood: Mood }) {
     <svg ref={svgRef} className={`emily emily-${mood}`} viewBox="0 0 200 178" role="img" aria-label="Emily">
       <defs>
         {/* Soft matte clay: light from the top left, shade toward the bottom right. */}
-        <radialGradient id="emily-clay" cx="0.32" cy="0.22" r="0.95">
+        <radialGradient id={`emily-clay-${uid}`} cx="0.32" cy="0.22" r="0.95">
           <stop offset="0" stopColor="#ffffff" />
           <stop offset="0.45" stopColor="#edf5fb" />
           <stop offset="1" stopColor="#bdd5ea" />
         </radialGradient>
-        <radialGradient id="emily-cheek" cx="0.5" cy="0.5" r="0.5">
+        <radialGradient id={`emily-cheek-${uid}`} cx="0.5" cy="0.5" r="0.5">
           <stop offset="0" stopColor="#ff9f85" stopOpacity="0.75" />
           <stop offset="1" stopColor="#ff9f85" stopOpacity="0" />
         </radialGradient>
-        <radialGradient id="emily-eye" cx="0.38" cy="0.3" r="0.8">
+        <radialGradient id={`emily-eye-${uid}`} cx="0.38" cy="0.3" r="0.8">
           <stop offset="0" stopColor="#35597d" />
           <stop offset="1" stopColor="#14283d" />
         </radialGradient>
-        <radialGradient id="emily-ground" cx="0.5" cy="0.5" r="0.5">
+        <radialGradient id={`emily-ground-${uid}`} cx="0.5" cy="0.5" r="0.5">
           <stop offset="0" stopColor="#16324a" stopOpacity="0.22" />
           <stop offset="1" stopColor="#16324a" stopOpacity="0" />
         </radialGradient>
         {/* Shading inside the edge plus a fine grain, so the surface reads as a soft
             solid object instead of a flat sticker. */}
-        <filter id="emily-material" x="-10%" y="-10%" width="120%" height="125%">
+        <filter id={`emily-material-${uid}`} x="-10%" y="-10%" width="120%" height="125%">
           <feComponentTransfer in="SourceAlpha" result="outside">
             <feFuncA type="table" tableValues="1 0" />
           </feComponentTransfer>
@@ -168,20 +184,20 @@ function EmilyCloud({ mood }: { mood: Mood }) {
           </feMerge>
         </filter>
       </defs>
-      <ellipse cx="102" cy="166" rx="74" ry="9" fill="url(#emily-ground)" />
+      <ellipse cx="102" cy="166" rx="74" ry="9" fill={`url(#emily-ground-${uid})`} />
       <path
         d="M50 152C22 152 6 126 17 100c6-14 13-22 13-38 0-22 18-35 37-32C76 11 102 3 124 16c9 5 14 12 27 12 22 0 36 18 32 38-2 12 6 22 10 37 7 27-11 49-37 49Z"
-        fill="url(#emily-clay)"
-        filter="url(#emily-material)"
+        fill={`url(#emily-clay-${uid})`}
+        filter={`url(#emily-material-${uid})`}
       />
-      <ellipse cx="52" cy="116" rx="19" ry="13" fill="url(#emily-cheek)" />
-      <ellipse cx="150" cy="116" rx="19" ry="13" fill="url(#emily-cheek)" />
+      <ellipse cx="52" cy="116" rx="19" ry="13" fill={`url(#emily-cheek-${uid})`} />
+      <ellipse cx="150" cy="116" rx="19" ry="13" fill={`url(#emily-cheek-${uid})`} />
       <g className="emily-brows" fill="none" stroke="#1d3d5c" strokeOpacity="0.32" strokeWidth="5.5" strokeLinecap="round">
         <path className="emily-brow-left" d="M64 68q9-6 18-3" />
         <path className="emily-brow-right" d="M120 65q9-3 18 3" />
       </g>
       <g className="emily-look">
-        <g className="emily-eyes" fill="url(#emily-eye)">
+        <g className="emily-eyes" fill={`url(#emily-eye-${uid})`}>
           <ellipse cx="76" cy="96" rx="10" ry="13" />
           <ellipse cx="126" cy="96" rx="10" ry="13" />
         </g>
@@ -408,10 +424,11 @@ function NowPanel({
     headline = `Possible fall at ${timeFormat.format(fresh.createdAt)}`
     detail = `Emily is asking ${personName} if everything is OK.`
   } else if (fresh && fresh.status === 'acknowledged' && now - fresh.createdAt < ON_THE_WAY_MS) {
-    headline = `${fresh.acknowledgedBy ?? 'Someone'} is on the way`
+    headline = `Help is on the way to ${personName}`
     action = fresh
     showGo = false
-    detail = `${personName} fell at ${timeFormat.format(fresh.createdAt)}. Emily told ${personName} that help is coming.`
+    quote = spokenWords(fresh.transcript)
+    detail = `She fell at ${timeFormat.format(fresh.createdAt)} and knows someone is coming.`
   } else if (never) {
     mood = 'plain'
     headline = `Waiting for ${personName}’s watch`
@@ -467,7 +484,8 @@ function summarize(incident: Incident, personName: string): { kind: 'ok' | 'aler
   const said = words ? `${personName} said “${words}”` : `${personName} did not answer Emily`
   switch (incident.status) {
     case 'acknowledged':
-      return { kind: 'ok', title: `${incident.acknowledgedBy ?? 'Someone'} went to help`, said }
+      // About her, not about who went: the reader is often the one who went.
+      return { kind: 'ok', title: `${personName} needed help`, said }
     case 'closed':
       return incident.falseAlarmBy
         ? { kind: 'ok', title: 'False alarm', said: `${incident.falseAlarmBy} said it was a false alarm` }
@@ -619,7 +637,22 @@ function History({
   onGo: (incidentId: Id<'incidents'>, name: string) => Promise<void>
   onFalseAlarm: (incidentId: Id<'incidents'>, name: string) => Promise<void>
 }) {
-  const { incidents, personName, familyNames } = overview
+  const { personName, familyNames } = overview
+  const [clearedAt, setClearedAt] = useState<number>(readClearedAt)
+  const [showAll, setShowAll] = useState(false)
+  // Cleared falls are hidden, except the ones still waiting for someone.
+  const incidents = overview.incidents.filter((i) => i.createdAt > clearedAt || isOpen(i))
+  const hiddenCount = overview.incidents.length - incidents.length
+  const clearList = (at: number) => {
+    setClearedAt(at)
+    setShowAll(false)
+    try {
+      if (at === 0) localStorage.removeItem(CLEARED_STORAGE_KEY)
+      else localStorage.setItem(CLEARED_STORAGE_KEY, String(at))
+    } catch {
+      // Private window: the list is cleared for this visit only.
+    }
+  }
   const waiting = incidents.filter(isOpen)
   const today = incidents.filter((i) => dayLabel(i.createdAt, now) === 'Today')
   const week = incidents.filter((i) => now - i.createdAt < WEEK_MS)
@@ -654,7 +687,8 @@ function History({
       ? incidents[0]._id
       : null
 
-  const shown = lists[tab]
+  const full = lists[tab]
+  const shown = showAll ? full : full.slice(0, SHORT_LIST)
   const days: { label: string; items: Incident[] }[] = []
   for (const incident of shown) {
     const label = dayLabel(incident.createdAt, now)
@@ -667,7 +701,14 @@ function History({
 
   return (
     <section className="history">
-      <h2>Falls</h2>
+      <div className="history-head">
+        <h2>Falls</h2>
+        {incidents.length > waiting.length && (
+          <button type="button" className="text-button" onClick={() => clearList(Date.now())}>
+            Clear list
+          </button>
+        )}
+      </div>
       <div className="tabs" role="tablist" aria-label="Which falls to show" onKeyDown={onKeyDown}>
         {tabs.map(({ id, label }) => (
           <button
@@ -713,6 +754,19 @@ function History({
           ))
         )}
       </div>
+      {full.length > shown.length && (
+        <button type="button" className="quiet-button" onClick={() => setShowAll(true)}>
+          Show all {full.length}
+        </button>
+      )}
+      {hiddenCount > 0 && (
+        <p className="care-note">
+          {hiddenCount} older {hiddenCount === 1 ? 'fall is' : 'falls are'} hidden on this device.{' '}
+          <button type="button" className="text-button" onClick={() => clearList(0)}>
+            Show them again
+          </button>
+        </p>
+      )}
     </section>
   )
 }

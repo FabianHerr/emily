@@ -368,6 +368,18 @@
 
 /* ---------- History ---------- */
 
+.history-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.history-head .text-button {
+  min-height: 40px;
+  color: var(--ink-soft);
+}
+
 .history h2 {
   margin-top: 0;
   margin-bottom: 4px;
