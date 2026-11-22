@@ -18,6 +18,9 @@ const UNKNOWN_ACKNOWLEDGER = "Someone";
 // A /fall that arrives this soon after an open incident on the same watch is a
 // retry (the watch lost our reply), not a new fall: reuse the incident, no new alert.
 const DEDUPE_WINDOW_MS = 60_000;
+// How many of a watch's latest incidents recordFall looks at (matching a fallId, and
+// dropping falls still in progress when a newer one arrives).
+const RECENT_INCIDENTS = 10;
 // Last defence (HANDOFF.md section 8): a new incident with no decision, or whose round 2
 // never came, gets an emergency after this long. The watch waits up to 20 s for our
 // round-1 reply before asking round 2 on its own, so round 2 can arrive 30+ s after
@@ -50,6 +53,8 @@ export const recordFall = internalMutation({
     modelConfidence: v.optional(v.number()),
     // Raw string from the query string; validated here with normalizeId.
     incidentId: v.optional(v.string()),
+    // The watch's id for this fall: same on retries and round 2, new for a new fall.
+    fallId: v.optional(v.string()),
     audioId: v.optional(v.id("_storage")),
   },
   returns: v.union(
@@ -101,17 +106,31 @@ export const recordFall = internalMutation({
       return { ok: true as const, incidentId: id, audioUnused };
     } else {
       // Round 1, or round 2 without incidentId (the watch lost the round-1 reply).
-      const latest = await ctx.db
+      const recent = await ctx.db
         .query("incidents")
         .withIndex("by_deviceId_and_createdAt", (q) => q.eq("deviceId", args.deviceId))
         .order("desc")
-        .first();
-      const isOpen =
-        latest !== null &&
-        (latest.status === "asking" ||
-          latest.status === "precautionary" ||
-          latest.status === "emergency");
-      if (latest !== null && isOpen && Date.now() - latest.createdAt < DEDUPE_WINDOW_MS) {
+        .take(RECENT_INCIDENTS);
+      // Is this a fall we already have?
+      // - With a fallId: yes only if an incident carries that same id, however long ago.
+      //   A different id is a NEW fall, even seconds after the last one.
+      // - Without one (curl, older firmware): the old rule, an open incident under 60 s old.
+      let same: Doc<"incidents"> | null = null;
+      if (args.fallId !== undefined) {
+        same = recent.find((i) => i.fallId === args.fallId) ?? null;
+      } else {
+        const latest = recent[0] ?? null;
+        const isOpen =
+          latest !== null &&
+          (latest.status === "asking" ||
+            latest.status === "precautionary" ||
+            latest.status === "emergency");
+        if (latest !== null && isOpen && Date.now() - latest.createdAt < DEDUPE_WINDOW_MS) {
+          same = latest;
+        }
+      }
+      if (same !== null) {
+        const latest = same;
         // Retry of a fall we already have: same incident, no new alert from the retry itself.
         // One clip per round, in that round's own field: a retried upload is not attached twice.
         const attachAudio =
@@ -132,6 +151,22 @@ export const recordFall = internalMutation({
         const audioUnused = args.audioId !== undefined && !attachAudio;
         return { ok: true as const, incidentId: latest._id, audioUnused };
       }
+      // A new fall. The newest fall wins (decided 22 Nov): any earlier fall of this
+      // watch that is still only being asked about is dropped, because the watch has
+      // stopped that conversation. Without this its 60 s safety net would later send
+      // "not responding" for a fall nobody is asking about any more. Falls that
+      // already alerted the family, or were answered, are left exactly as they are.
+      for (const earlier of recent) {
+        if (earlier.status !== "asking") continue;
+        await ctx.db.patch("incidents", earlier._id, { status: "closed", superseded: true });
+        await logEvent(ctx, {
+          deviceId: args.deviceId,
+          incidentId: earlier._id,
+          type: "incident_closed",
+          text: "A newer fall replaced this one",
+          level: "info",
+        });
+      }
       incidentId = await ctx.db.insert("incidents", {
         deviceId: args.deviceId,
         status: "asking",
@@ -142,6 +177,7 @@ export const recordFall = internalMutation({
         model_confidence: args.modelConfidence ?? DEFAULT_MODEL_CONFIDENCE,
         // A round 2 without incidentId keeps its clip as round 2's, not round 1's.
         ...(args.audioId !== undefined && audioPatch(args.round, args.audioId)),
+        ...(args.fallId !== undefined && { fallId: args.fallId }),
         receipts: [],
         createdAt: Date.now(),
       });

@@ -174,6 +174,17 @@ AI Service llama a Notify Family y a Talk to Loved One **en paralelo**: el aviso
 - Guarda `devices.lastHeartbeat` (y `battery`). `GET /poll` también cuenta como latido: `/heartbeat` hace falta sobre todo para mandar la batería.
 - Más de 3 min sin latido → evento "sin señal" (sección 12).
 
+**Caídas seguidas: gana la más nueva (22 nov, decisión de Fabian y Sebastian).** Cambios que solo SUMAN; un reloj que no manda nada nuevo sigue funcionando.
+- `POST /fall` acepta `&fallId=<id>` (opcional, hasta 64 caracteres). El reloj manda el MISMO id en los reintentos y en la ronda 2 de una caída, y uno DISTINTO en cada caída nueva.
+  - Mismo `fallId` que un incidente del reloj → es esa misma caída: devuelve su `incidentId`, no crea nada.
+  - `fallId` distinto → caída nueva, aunque hayan pasado 5 segundos.
+  - Sin `fallId` → regla vieja: una caída abierta de menos de 60 s cuenta como la misma.
+- Al llegar una caída nueva, toda caída anterior de ese reloj que siga en `asking` (todavía preguntando) se cierra como reemplazada (`superseded`). Así no sale después un "not responding" por una conversación que el reloj ya abandonó. Las que YA avisaron a la familia o ya se confirmaron no se tocan.
+- `GET /poll` devuelve además `"incidentId": "jd7..."` cuando el mensaje es de una caída (los recordatorios de pastillas no lo traen). El reloj puede descartar mensajes de una caída que ya no es la actual.
+- Un mensaje con más de 2 minutos en cola no se entrega: se marca entregado y se salta.
+- Ejemplo: caída A, Rosa no contesta; 5 s después caída B y dice "I'm fine" → A queda "Replaced by a newer fall", B se cierra, la familia no recibe nada.
+- No hecho: registrar golpes extra dentro de la misma caída (`extra=1`), ni avisar por "segunda caída en 10 min".
+
 ## 7. Flujo de una caída: dos rondas, sin apresurarse
 
 **Regla clave (21 nov): la ronda 1 nunca alerta, salvo que la persona pida ayuda.** Así una sola caída no manda dos avisos.

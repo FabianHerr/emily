@@ -6,6 +6,7 @@ import type { Id } from "./_generated/dataModel";
 // A 5 s, 16 kHz, mono, 16-bit WAV is ~160 KB. Anything bigger is a bug.
 const MAX_AUDIO_BYTES = 2 * 1024 * 1024;
 const AUDIO_CONTENT_TYPE = "audio/wav";
+const MAX_FALL_ID_CHARS = 64;
 
 function json(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -68,6 +69,8 @@ const fall = httpAction(async (ctx, req) => {
     throw error;
   }
   const incidentId = params.get("incidentId")?.trim() || undefined;
+  // The watch's id for this fall (optional). Longer than this is not one of ours.
+  const fallId = params.get("fallId")?.trim().slice(0, MAX_FALL_ID_CHARS) || undefined;
 
   // Size guard: check the header first so a huge upload is not read at all.
   const declaredLength = Number(req.headers.get("Content-Length") ?? 0);
@@ -92,6 +95,7 @@ const fall = httpAction(async (ctx, req) => {
     positionChanged,
     modelConfidence,
     incidentId,
+    fallId,
     audioId,
   });
 
@@ -160,7 +164,7 @@ const ack = httpAction(async (ctx, req) => {
 });
 
 // GET /poll?device=watch-1: the watch asks "anything for me to say?".
-// 200 { text, askAgain, audioUrl? } for the oldest waiting message (audioUrl is left out
+// 200 { text, askAgain, audioUrl?, incidentId? } for the oldest waiting message (audioUrl is left out
 // when the voice failed: show the text). 200 {} when there is nothing. 404 unknown device.
 // Each message is handed out once. Also counts as a heartbeat.
 const poll = httpAction(async (ctx, req) => {
@@ -170,12 +174,15 @@ const poll = httpAction(async (ctx, req) => {
   const result = await ctx.runMutation(internal.talk.poll, { deviceId });
   if (!result.known) return json(404, { error: "Unknown device" });
   if (!result.message) return json(200, {});
-  const { text, askAgain, audioId } = result.message;
+  const { text, askAgain, audioId, incidentId } = result.message;
   const base = process.env.CONVEX_SITE_URL ?? url.origin;
   return json(200, {
     text,
     askAgain,
     ...(audioId !== null && { audioUrl: `${base}${AUDIO_PATH_PREFIX}${audioId}` }),
+    // Which fall this message belongs to (pill reminders have none), so the watch can
+    // ignore messages from a fall it is no longer talking about.
+    ...(incidentId !== null && { incidentId }),
   });
 });
 

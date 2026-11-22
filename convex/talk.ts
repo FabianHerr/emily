@@ -9,6 +9,11 @@ import type { Id } from "./_generated/dataModel";
 import { logEvent } from "./events";
 import { recordHeartbeat } from "./signal";
 
+// A queued message older than this is never spoken.
+const MAX_MESSAGE_AGE_MS = 2 * 60 * 1000;
+// Upper bound on the messages looked at in one poll.
+const MAX_WAITING_MESSAGES = 20;
+
 // Scheduled (never awaited) by the AI Service and by /ack, so the family alert never
 // waits for the audio. If the voice fails or times out, the message is queued with
 // text only and the watch shows it on screen. No incidentId for messages that are not
@@ -78,6 +83,7 @@ export const poll = internalMutation({
           text: v.string(),
           askAgain: v.boolean(),
           audioId: v.union(v.id("_storage"), v.null()),
+          incidentId: v.union(v.id("incidents"), v.null()),
         }),
       ),
     }),
@@ -92,12 +98,22 @@ export const poll = internalMutation({
     await recordHeartbeat(ctx, device, undefined);
 
     // Oldest first: within one index value, rows come back in creation order.
-    const next = await ctx.db
+    // A message that waited too long is about a moment that has passed (the watch was
+    // off, or busy with a newer fall): mark it delivered and move on.
+    const waiting = await ctx.db
       .query("messages")
       .withIndex("by_deviceId_and_delivered", (q) =>
         q.eq("deviceId", args.deviceId).eq("delivered", false),
       )
-      .first();
+      .take(MAX_WAITING_MESSAGES);
+    let next = null;
+    for (const message of waiting) {
+      if (Date.now() - message._creationTime <= MAX_MESSAGE_AGE_MS) {
+        next = message;
+        break;
+      }
+      await ctx.db.patch("messages", message._id, { delivered: true });
+    }
     if (!next) return { known: true as const, message: null };
     await ctx.db.patch("messages", next._id, { delivered: true });
     // An "ask again" with no text says nothing new: not worth a feed row.
@@ -112,7 +128,12 @@ export const poll = internalMutation({
     }
     return {
       known: true as const,
-      message: { text: next.text, askAgain: next.askAgain, audioId: next.audioId ?? null },
+      message: {
+        text: next.text,
+        askAgain: next.askAgain,
+        audioId: next.audioId ?? null,
+        incidentId: next.incidentId ?? null,
+      },
     };
   },
 });

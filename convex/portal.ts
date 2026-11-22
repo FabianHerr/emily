@@ -60,6 +60,7 @@ export const overview = query({
           familySummary: v.union(v.string(), v.null()),
           acknowledgedBy: v.union(v.string(), v.null()),
           falseAlarmBy: v.union(v.string(), v.null()),
+          superseded: v.boolean(),
         }),
       ),
       // The most recent daily summary (CJ-32, reports.generate), or null.
@@ -114,6 +115,7 @@ export const overview = query({
           familySummary,
           acknowledgedBy: i.acknowledgedBy ?? null,
           falseAlarmBy: i.falseAlarmBy ?? null,
+          superseded: i.superseded === true,
         };
       }),
       latestReport: latestReport

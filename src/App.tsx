@@ -487,6 +487,9 @@ function summarize(incident: Incident, personName: string): { kind: 'ok' | 'aler
       // About her, not about who went: the reader is often the one who went.
       return { kind: 'ok', title: `${personName} needed help`, said }
     case 'closed':
+      if (incident.superseded) {
+        return { kind: 'wait', title: 'Replaced by a newer fall', said: `${personName} fell again before answering` }
+      }
       return incident.falseAlarmBy
         ? { kind: 'ok', title: 'False alarm', said: `${incident.falseAlarmBy} said it was a false alarm` }
         : { kind: 'ok', title: `${personName} was OK`, said }

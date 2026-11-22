@@ -56,6 +56,11 @@ export default defineSchema({
     receipts: v.array(v.string()), // Pushover receipts (CJ-7)
     acknowledgedBy: v.optional(v.string()),
     falseAlarmBy: v.optional(v.string()), // family member who marked it a false alarm
+    // The watch's own id for this fall: the same on retries and on round 2, different
+    // for a new fall. Missing on falls sent without it (curl, older firmware).
+    fallId: v.optional(v.string()),
+    // Closed because a newer fall arrived while this one was still being asked about.
+    superseded: v.optional(v.boolean()),
     createdAt: v.number(), // ms since epoch
   }).index("by_deviceId_and_createdAt", ["deviceId", "createdAt"]),
 
