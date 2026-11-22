@@ -22,6 +22,8 @@ const WHO_STORAGE_KEY = 'emily.who'
 const CLEARED_STORAGE_KEY = 'emily.clearedAt'
 // A list longer than this shows only its newest falls until "Show all" is pressed.
 const SHORT_LIST = 4
+// Falls removed one by one with "Remove from list", on this device only.
+const HIDDEN_STORAGE_KEY = 'emily.hiddenFalls'
 
 type Overview = NonNullable<ReturnType<typeof useQuery<typeof api.portal.overview>>>
 type Incident = Overview['incidents'][number]
@@ -59,6 +61,15 @@ function readClearedAt(): number {
     return Number(localStorage.getItem(CLEARED_STORAGE_KEY)) || 0
   } catch {
     return 0
+  }
+}
+
+function readHidden(): string[] {
+  try {
+    const saved: unknown = JSON.parse(localStorage.getItem(HIDDEN_STORAGE_KEY) ?? '[]')
+    return Array.isArray(saved) ? saved.filter((id) => typeof id === 'string') : []
+  } catch {
+    return []
   }
 }
 
@@ -544,6 +555,7 @@ function FallRow({
   onGo,
   onFalseAlarm,
   showAction,
+  onRemove,
 }: {
   incident: Incident
   personName: string
@@ -553,6 +565,7 @@ function FallRow({
   onGo: (incidentId: Id<'incidents'>, name: string) => Promise<void>
   onFalseAlarm: (incidentId: Id<'incidents'>, name: string) => Promise<void>
   showAction: boolean
+  onRemove: (() => void) | null
 }) {
   const [open, setOpen] = useState(false)
   const { kind, title, said } = summarize(incident, personName)
@@ -605,6 +618,11 @@ function FallRow({
               </li>
             ))}
           </ol>
+          {onRemove && (
+            <button type="button" className="text-button fall-remove" onClick={onRemove}>
+              Remove from list
+            </button>
+          )}
           {incident.status === 'acknowledged' && (
             <Respond
               compact
@@ -643,10 +661,24 @@ function History({
   const { personName, familyNames } = overview
   const [clearedAt, setClearedAt] = useState<number>(readClearedAt)
   const [showAll, setShowAll] = useState(false)
-  // Cleared falls are hidden, except the ones still waiting for someone.
-  const incidents = overview.incidents.filter((i) => i.createdAt > clearedAt || isOpen(i))
+  const [hidden, setHidden] = useState<string[]>(readHidden)
+  const saveHidden = (ids: string[]) => {
+    setHidden(ids)
+    try {
+      localStorage.setItem(HIDDEN_STORAGE_KEY, JSON.stringify(ids))
+    } catch {
+      // Private window: hidden for this visit only.
+    }
+  }
+  const hideOne = (id: string) => saveHidden([...hidden, id])
+  // Cleared or removed falls are hidden, except the ones still waiting for someone.
+  const incidents = overview.incidents.filter(
+    (i) => isOpen(i) || (i.createdAt > clearedAt && !hidden.includes(i._id)),
+  )
   const hiddenCount = overview.incidents.length - incidents.length
   const clearList = (at: number) => {
+    // "Show them again" (at = 0) also brings back the ones removed one by one.
+    if (at === 0) saveHidden([])
     setClearedAt(at)
     setShowAll(false)
     try {
@@ -750,6 +782,8 @@ function History({
                     onGo={onGo}
                     onFalseAlarm={onFalseAlarm}
                     showAction={isOpen(incident) && incident._id !== leading}
+                    // A fall still waiting for someone cannot be removed.
+                    onRemove={isOpen(incident) ? null : () => hideOne(incident._id)}
                   />
                 ))}
               </ul>
@@ -832,6 +866,14 @@ function Summary({ overview, now }: { overview: Overview; now: number }) {
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
   const report = overview.latestReport
+  // The numbers are counted here, not written by the AI, so they are always right.
+  const today = overview.incidents.filter((i) => dayLabel(i.createdAt, now) === 'Today' && !i.superseded)
+  const facts = {
+    falls: today.length,
+    neededHelp: today.filter((i) => i.status === 'acknowledged').length,
+    wasOk: today.filter((i) => i.status === 'closed').length,
+    waiting: today.filter(isOpen).length,
+  }
 
   const write = async () => {
     setBusy(true)
@@ -849,6 +891,24 @@ function Summary({ overview, now }: { overview: Overview; now: number }) {
   return (
     <section className="care">
       <h2>Summary</h2>
+      <dl className="day-facts">
+        <div>
+          <dt>Falls today</dt>
+          <dd>{facts.falls}</dd>
+        </div>
+        <div>
+          <dt>Needed help</dt>
+          <dd>{facts.neededHelp}</dd>
+        </div>
+        <div>
+          <dt>Was OK</dt>
+          <dd>{facts.wasOk}</dd>
+        </div>
+        <div className={facts.waiting > 0 ? 'day-fact-alert' : undefined}>
+          <dt>Still waiting</dt>
+          <dd>{facts.waiting}</dd>
+        </div>
+      </dl>
       {report ? (
         <>
           <p className="summary-text">{report.text}</p>
@@ -857,7 +917,7 @@ function Summary({ overview, now }: { overview: Overview; now: number }) {
           </p>
         </>
       ) : (
-        <p className="quiet">Emily can write a short summary of the last 24 hours.</p>
+        <p className="quiet">Emily can add a sentence about how the day went.</p>
       )}
       {problem && (
         <p className="error" role="alert">

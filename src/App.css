@@ -639,6 +639,56 @@
   font-weight: 700;
 }
 
+/* The day in four numbers, as a plain row of label and value. */
+.day-facts {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin: 4px 0 14px;
+}
+
+.day-facts div {
+  padding: 10px 12px;
+  border-radius: 16px;
+  background: var(--calm-soft);
+}
+
+.day-facts dt {
+  font-size: 0.8rem;
+  line-height: 1.2;
+  color: var(--ink-soft);
+}
+
+.day-facts dd {
+  margin: 2px 0 0;
+  font-family: var(--round);
+  font-size: 1.5rem;
+  font-weight: 750;
+  line-height: 1.1;
+  color: var(--calm-deep);
+  font-variant-numeric: tabular-nums;
+}
+
+.day-facts .day-fact-alert {
+  background: var(--alert-soft);
+}
+
+.day-facts .day-fact-alert dd {
+  color: var(--alert-deep);
+}
+
+@media (max-width: 480px) {
+  .day-facts {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+.fall-remove {
+  margin-top: 12px;
+  min-height: 40px;
+  color: var(--ink-soft);
+}
+
 .summary-text {
   font-size: 1.08rem;
   line-height: 1.5;
