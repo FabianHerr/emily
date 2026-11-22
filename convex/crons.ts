@@ -69,4 +69,6 @@ const crons = cronJobs();
 crons.cron("pill reminders", "* * * * *", internal.crons.remindPills, {});
 // Logs "no signal" once a watch has been quiet for 3 minutes (convex/signal.ts).
 crons.cron("watch signal check", "* * * * *", internal.signal.checkSignal, {});
+// Keeps the Node actions (speech to text, Emily's voice) from going to sleep (convex/elevenlabs.ts).
+crons.interval("keep voice functions awake", { minutes: 1 }, internal.elevenlabs.keepAwake, {});
 export default crons;

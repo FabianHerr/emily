@@ -92,6 +92,16 @@ function addWavHeader(pcm: Bytes): Bytes {
   return out;
 }
 
+// Called every minute by convex/crons.ts and does nothing. Node actions go to sleep
+// after a few idle minutes, and waking them took about 8 s on a real fall (measured
+// 22 Nov: 11.4 s to decide after an idle spell, 2.1-2.9 s right after another call).
+// Calling this keeps the Node side of this file loaded. No ElevenLabs request, no credits.
+export const keepAwake = internalAction({
+  args: {},
+  returns: v.null(),
+  handler: async () => null,
+});
+
 export const transcribe = internalAction({
   args: { audioId: v.id("_storage") },
   returns: v.object({
