@@ -4,7 +4,7 @@
   --tone: var(--green-deep);
   background: var(--green);
   color: var(--tone);
-  border-radius: 0 0 28px 28px;
+  border-radius: 0 0 36px 36px;
   transition: background-color 600ms var(--ease-out), color 600ms var(--ease-out);
 }
 
@@ -46,10 +46,10 @@
 
 .now h1 {
   font-family: var(--round);
-  font-size: clamp(1.75rem, 7.4vw, 2.3rem);
-  line-height: 1.12;
-  font-weight: 700;
-  letter-spacing: -0.015em;
+  font-size: clamp(2rem, 8.4vw, 2.6rem);
+  line-height: 1.08;
+  font-weight: 800;
+  letter-spacing: -0.02em;
   text-wrap: balance;
 }
 
@@ -176,7 +176,7 @@
   min-height: 58px;
   padding: 0 20px;
   border: 0;
-  border-radius: 16px;
+  border-radius: 999px;
   background: var(--pink-deep);
   color: #fff;
   font-family: var(--round);
@@ -215,7 +215,7 @@
   margin-top: 10px;
   padding: 0 20px;
   border: 1.5px solid currentColor;
-  border-radius: 16px;
+  border-radius: 999px;
   background: none;
   font-family: var(--round);
   font-size: 1.05rem;
@@ -278,8 +278,16 @@
 /* ---------- Page ---------- */
 
 .page {
-  padding-top: 8px;
+  padding-top: 18px;
   padding-bottom: 56px;
+}
+
+/* Each section sits on its own soft, rounded sheet over the blush page. */
+.history,
+.care {
+  padding: 22px 20px 24px;
+  border-radius: 28px;
+  background: var(--sheet);
 }
 
 .error {
@@ -299,7 +307,7 @@
 /* ---------- History ---------- */
 
 .history h2 {
-  margin-top: 30px;
+  margin-top: 0;
   margin-bottom: 4px;
   font-family: var(--round);
   font-size: 1.3rem;
@@ -309,39 +317,42 @@
 /* Tabs: a row of plain labels with a thick underline on the chosen one. */
 .tabs {
   display: flex;
-  gap: 4px 22px;
-  margin-top: 10px;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+  padding-bottom: 14px;
   border-bottom: 1px solid var(--line);
 }
 
 .tab {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  min-height: 46px;
-  padding: 0 2px;
-  margin-bottom: -1px;
-  border: 0;
-  border-bottom: 3px solid transparent;
+  gap: 8px;
+  min-height: 42px;
+  padding: 0 8px 0 16px;
+  border: 1.5px solid var(--line);
+  border-radius: 999px;
   background: none;
   font-weight: 600;
   color: var(--ink-soft);
   cursor: pointer;
-  transition: color 160ms ease-out, border-color 160ms ease-out;
+  transition: color 160ms ease-out, background-color 160ms ease-out, border-color 160ms ease-out;
 }
 
 .tab:hover {
   color: var(--ink);
+  border-color: var(--ink-soft);
 }
 
 .tab[aria-selected='true'] {
-  color: var(--ink);
-  border-bottom-color: var(--green-deep);
+  color: var(--sheet);
+  background: var(--green-deep);
+  border-color: var(--green-deep);
 }
 
 .tab-count {
-  min-width: 1.6em;
-  padding: 1px 7px;
+  min-width: 1.9em;
+  padding: 2px 8px;
   border-radius: 999px;
   background: var(--green-soft);
   color: var(--green-deep);
@@ -358,7 +369,13 @@
 }
 
 .tab-urgent[aria-selected='true'] {
-  border-bottom-color: var(--pink-deep);
+  background: var(--pink-deep);
+  border-color: var(--pink-deep);
+}
+
+.tab-urgent[aria-selected='true'] .tab-count {
+  background: #fff;
+  color: var(--pink-deep);
 }
 
 #falls-panel > .quiet {
@@ -413,7 +430,7 @@
 }
 
 .fall-mark-wait {
-  background: #efedea;
+  background: var(--line);
   color: var(--ink-soft);
 }
 
@@ -538,7 +555,7 @@
 /* ---------- Summary and pill reminders ---------- */
 
 .care {
-  margin-top: 44px;
+  margin-top: 16px;
 }
 
 .care h2 {
@@ -564,23 +581,25 @@
 .quiet-button {
   min-height: 46px;
   margin-top: 14px;
-  padding: 0 18px;
-  border: 1.5px solid var(--green-deep);
-  border-radius: 14px;
-  background: none;
-  color: var(--green-deep);
+  padding: 0 22px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--green-deep);
+  color: var(--sheet);
   font-weight: 650;
   cursor: pointer;
-  transition: background-color 160ms ease-out;
+  transition: background-color 160ms ease-out, transform 160ms var(--ease-out);
 }
 
 .quiet-button:hover {
-  background: var(--green-soft);
+  background: var(--ink);
+  transform: translateY(-1px);
 }
 
 .quiet-button:disabled {
   opacity: 0.6;
   cursor: default;
+  transform: none;
 }
 
 .pills li {
@@ -627,7 +646,7 @@
   width: 100%;
   padding: 0 12px;
   border: 1.5px solid var(--line);
-  border-radius: 12px;
+  border-radius: 16px;
   background: #fff;
   font: inherit;
   color: var(--ink);
@@ -651,6 +670,28 @@
 
 .care .error {
   margin-top: 12px;
+}
+
+/* Phone: the three tabs fit on one line. */
+@media (max-width: 480px) {
+  .tabs {
+    flex-wrap: nowrap;
+    gap: 5px;
+  }
+
+  .tab {
+    flex: 1 1 auto;
+    justify-content: center;
+    padding: 0 5px 0 9px;
+    gap: 5px;
+    font-size: 0.9rem;
+    white-space: nowrap;
+  }
+
+  .tab-count {
+    min-width: 1.6em;
+    padding: 2px 5px;
+  }
 }
 
 /* ---------- Tablet ---------- */
@@ -736,14 +777,20 @@
 
   .page {
     width: 100%;
-    max-width: 760px;
+    max-width: 800px;
     margin: 0;
-    padding: 64px 56px 80px;
+    padding: 40px 40px 64px;
   }
 
   .history h2 {
     margin-top: 0;
     font-size: 1.7rem;
+  }
+
+  .history,
+  .care {
+    padding: 30px 32px 32px;
+    border-radius: 32px;
   }
 
   .care h2 {

@@ -1,17 +1,19 @@
 :root {
-  /* Emily's two pastels on a near-white page. Green: all is well. Pink: look here.
-     The deep shades are the same hues, dark enough for text and for the one button. */
+  /* Emily's two pastels. Green: all is well. Pink: look here. The deep shades are the
+     same hues, dark enough for text and for buttons. The page is a pale mint and the
+     ink a forest green, both taken from Emily's own green, so nothing is plain grey. */
   --green: #c6e9d3;
   --green-soft: #e8f5ec;
   --green-deep: #1d5a3f;
-  --pink: #f8c8d4;
+  --pink: #f6bfcd;
   --pink-soft: #fdeaef;
   --pink-deep: #8f1f40;
 
-  --paper: #fdfcfa;
-  --ink: #26292a;
-  --ink-soft: #5c6160;
-  --line: #e7e4df;
+  --paper: #eff7f1;
+  --sheet: #ffffff;
+  --ink: #1b3a2a;
+  --ink-soft: #4c6657;
+  --line: #dcebe1;
 
   --sans: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   /* Rounded like the Emily wordmark; falls back to the system sans. */
