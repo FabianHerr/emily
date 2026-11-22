@@ -20,8 +20,6 @@ const FEED_LIMIT = 200
 const WHO_STORAGE_KEY = 'emily.who'
 // "Clear list" remembers the moment it was pressed, on this device only; nothing is deleted.
 const CLEARED_STORAGE_KEY = 'emily.clearedAt'
-// A list longer than this shows only its newest falls until "Show all" is pressed.
-const SHORT_LIST = 4
 // Falls removed one by one with "Remove from list", on this device only.
 const HIDDEN_STORAGE_KEY = 'emily.hiddenFalls'
 
@@ -693,7 +691,8 @@ function History({
 }) {
   const { personName, familyNames } = overview
   const [clearedAt, setClearedAt] = useState<number>(readClearedAt)
-  const [showAll, setShowAll] = useState(false)
+  // The chat scrolls inside its own box and opens at the bottom, on the newest message.
+  const chatRef = useRef<HTMLDivElement>(null)
   const [hidden, setHidden] = useState<string[]>(readHidden)
   const saveHidden = (ids: string[]) => {
     setHidden(ids)
@@ -713,7 +712,6 @@ function History({
     // "Show them again" (at = 0) also brings back the ones removed one by one.
     if (at === 0) saveHidden([])
     setClearedAt(at)
-    setShowAll(false)
     try {
       if (at === 0) localStorage.removeItem(CLEARED_STORAGE_KEY)
       else localStorage.setItem(CLEARED_STORAGE_KEY, String(at))
@@ -755,8 +753,19 @@ function History({
       ? incidents[0]._id
       : null
 
-  const full = lists[tab]
-  const shown = showAll ? full : full.slice(0, SHORT_LIST)
+  // Like a chat: oldest at the top, newest at the bottom.
+  const shown = [...lists[tab]].reverse()
+  const newestId = shown.length > 0 ? shown[shown.length - 1]._id : null
+  useEffect(() => {
+    const toBottom = () => {
+      const chat = chatRef.current
+      if (chat) chat.scrollTop = chat.scrollHeight
+    }
+    toBottom()
+    // Turning the phone changes the box's height: stay on the newest message.
+    window.addEventListener('resize', toBottom)
+    return () => window.removeEventListener('resize', toBottom)
+  }, [newestId, tab, shown.length])
   const days: { label: string; items: Incident[] }[] = []
   for (const incident of shown) {
     const label = dayLabel(incident.createdAt, now)
@@ -764,8 +773,6 @@ function History({
     if (last && last.label === label) last.items.push(incident)
     else days.push({ label, items: [incident] })
   }
-  // One day needs no day heading on the Today tab.
-  const showDayHeadings = tab !== 'today'
 
   return (
     <section className="history">
@@ -796,13 +803,13 @@ function History({
         ))}
       </div>
 
-      <div id="falls-panel" role="tabpanel" aria-labelledby={`tab-${tab}`}>
+      <div id="falls-panel" className="chat" ref={chatRef} role="tabpanel" aria-labelledby={`tab-${tab}`} tabIndex={0}>
         {shown.length === 0 ? (
           <p className="quiet">{empty[tab]}</p>
         ) : (
           days.map((day) => (
             <div key={day.label} className="day">
-              {showDayHeadings && <h3>{day.label}</h3>}
+              <h3>{day.label}</h3>
               <ul>
                 {day.items.map((incident) => (
                   <FallRow
@@ -824,11 +831,6 @@ function History({
           ))
         )}
       </div>
-      {full.length > shown.length && (
-        <button type="button" className="quiet-button" onClick={() => setShowAll(true)}>
-          Show all {full.length}
-        </button>
-      )}
       {hiddenCount > 0 && (
         <p className="care-note">
           {hiddenCount} older {hiddenCount === 1 ? 'fall is' : 'falls are'} hidden on this device.{' '}

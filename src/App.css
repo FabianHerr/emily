@@ -456,13 +456,30 @@
   padding-top: 18px;
 }
 
+/* The chat box: a fixed height that scrolls by itself, newest message at the bottom. */
+.chat {
+  max-height: min(62vh, 560px);
+  margin-top: 4px;
+  padding: 4px 6px 8px 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.chat:focus-visible {
+  outline-offset: 2px;
+}
+
+/* The date sits in a small pill in the middle, between the messages of two days. */
 .day h3 {
-  margin-top: 18px;
-  padding-bottom: 6px;
-  font-size: 0.94rem;
+  width: fit-content;
+  margin: 12px auto 2px;
+  padding: 3px 12px;
+  border-radius: 999px;
+  background: var(--paper);
+  font-size: 0.8rem;
   font-weight: 600;
   color: var(--ink-soft);
-  border-bottom: 1px solid var(--line);
 }
 
 /* One fall: a sentence you can open. */
@@ -954,6 +971,10 @@
    scrolls on the right. ---------- */
 
 @media (min-width: 980px) {
+  .chat {
+    max-height: calc(100dvh - 300px);
+  }
+
   /* The whole panel stays fixed here, so the short bar is not needed. */
   .mini {
     display: none;
