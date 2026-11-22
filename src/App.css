@@ -1236,3 +1236,125 @@
     padding: 16px 0;
   }
 }
+
+/* ---------- Phone: the chat looks like the Messages app on an iPhone ---------- */
+
+@media (max-width: 480px) {
+  .history {
+    padding: 14px 12px 12px;
+  }
+
+  /* Contact on top, centred: picture, name, status. "Clear list" sits in the corner. */
+  .history-head {
+    position: relative;
+    justify-content: center;
+    padding-bottom: 2px;
+  }
+
+  .chat-who {
+    flex-direction: column;
+    gap: 4px;
+    text-align: center;
+  }
+
+  .chat-who .msg-avatar {
+    width: 54px;
+    height: 54px;
+  }
+
+  .chat-who .msg-avatar svg {
+    width: 40px;
+  }
+
+  .history h2 {
+    margin-bottom: 0;
+    font-size: 1.05rem;
+  }
+
+  .chat-status {
+    font-size: 0.78rem;
+  }
+
+  .history-head .text-button {
+    position: absolute;
+    top: 0;
+    right: 0;
+    min-height: 32px;
+    font-size: 0.85rem;
+    white-space: nowrap;
+  }
+
+  /* Most of the screen is the conversation. */
+  .chat {
+    max-height: calc(100dvh - 330px);
+    min-height: 300px;
+    padding-right: 2px;
+  }
+
+  /* Day labels: small and centred, like the time stamps between messages. */
+  .chat .day h3 {
+    font-size: 0.74rem;
+    font-weight: 600;
+    text-align: center;
+    color: var(--ink-soft);
+  }
+
+  /* Bubbles: no picture column, round corners, a small tail corner at the bottom. */
+  .say {
+    max-width: 80%;
+    margin: 6px 0 0;
+    padding: 8px 13px 6px;
+    border-radius: 19px 19px 19px 5px;
+    font-size: 0.97rem;
+    line-height: 1.35;
+  }
+
+  .say-mine {
+    margin: 6px 0 0 auto;
+    border-radius: 19px 19px 5px 19px;
+  }
+
+  .say time {
+    font-size: 0.68rem;
+  }
+
+  .msg {
+    grid-template-columns: 1fr;
+    padding: 8px 0 2px;
+  }
+
+  .msg > .msg-avatar {
+    display: none;
+  }
+
+  .msg-bubble {
+    max-width: 92%;
+    padding: 11px 14px 9px;
+    border-radius: 19px 19px 19px 5px;
+  }
+
+  /* The message box: one pill, with the send button inside it. */
+  .composer {
+    position: relative;
+    margin-top: 8px;
+    padding-top: 10px;
+  }
+
+  .composer input {
+    min-height: 42px;
+    padding: 0 48px 0 16px;
+    font-size: 1rem;
+  }
+
+  .composer button {
+    position: absolute;
+    right: 5px;
+    bottom: 5px;
+    width: 32px;
+    height: 32px;
+  }
+
+  .composer button svg {
+    width: 16px;
+  }
+}
