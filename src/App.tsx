@@ -692,6 +692,9 @@ type Tab = 'new' | 'today' | 'week'
 const TAB_ORDER: Tab[] = ['new', 'today', 'week']
 
 // Falls in three views: the ones still waiting for someone, today's, and the last 7 days.
+// Same width as the phone rules in App.css.
+const PHONE_QUERY = '(max-width: 480px)'
+
 function History({
   overview,
   eventsByFall,
@@ -731,6 +734,34 @@ function History({
       setDraft(text)
     }
   }
+  // Phone: while writing, the chat fills the screen and the message box sits right on
+  // top of the keyboard. The visible area (without the keyboard) comes from visualViewport.
+  const [full, setFull] = useState(false)
+  const sectionRef = useRef<HTMLElement>(null)
+  useEffect(() => {
+    if (!full) return
+    const view = window.visualViewport
+    const fit = () => {
+      const section = sectionRef.current
+      if (!section) return
+      section.style.setProperty('--view-top', `${view?.offsetTop ?? 0}px`)
+      section.style.setProperty('--view-height', `${view?.height ?? window.innerHeight}px`)
+      const chat = chatRef.current
+      if (chat) chat.scrollTop = chat.scrollHeight
+    }
+    fit()
+    view?.addEventListener('resize', fit)
+    view?.addEventListener('scroll', fit)
+    document.body.style.overflow = 'hidden'
+    return () => {
+      view?.removeEventListener('resize', fit)
+      view?.removeEventListener('scroll', fit)
+      document.body.style.overflow = ''
+      // Back on the page: close the keyboard and land on the chat, not at the top.
+      if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
+      sectionRef.current?.scrollIntoView()
+    }
+  }, [full])
   const [hidden, setHidden] = useState<string[]>(readHidden)
   const saveHidden = (ids: string[]) => {
     setHidden(ids)
@@ -813,8 +844,13 @@ function History({
   }
 
   return (
-    <section className="history">
+    <section ref={sectionRef} className={full ? 'history history-full' : 'history'}>
       <div className="history-head">
+        {full && (
+          <button type="button" className="text-button chat-back" onClick={() => setFull(false)}>
+            Done
+          </button>
+        )}
         <div className="chat-who">
           <EmilyAvatar />
           <div>
@@ -899,6 +935,7 @@ function History({
           maxLength={300}
           autoComplete="off"
           placeholder="Ask Emily about today"
+          onFocus={() => setFull(window.matchMedia(PHONE_QUERY).matches)}
           onChange={(event) => setDraft(event.target.value)}
         />
         <button type="submit" disabled={draft.trim() === ''} aria-label="Send">

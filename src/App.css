@@ -1333,6 +1333,53 @@
     border-radius: 19px 19px 19px 5px;
   }
 
+  /* While writing: the chat covers the screen, down to the top of the keyboard. */
+  .history-full {
+    position: fixed;
+    z-index: 50;
+    top: var(--view-top, 0px);
+    left: 0;
+    width: 100%;
+    height: var(--view-height, 100dvh);
+    margin: 0;
+    padding: 10px 12px 8px;
+    border-radius: 0;
+    display: flex;
+    flex-direction: column;
+    background: var(--sheet);
+  }
+
+  .history-full .chat {
+    flex: 1;
+    min-height: 0;
+    max-height: none;
+  }
+
+  .history-full .tabs {
+    display: none;
+  }
+
+  .history-full .history-head {
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .history-full .chat-who .msg-avatar {
+    width: 36px;
+    height: 36px;
+  }
+
+  .history-full .chat-who .msg-avatar svg {
+    width: 27px;
+  }
+
+  .history-head .chat-back {
+    right: auto;
+    left: 0;
+    font-weight: 650;
+    color: var(--calm-deep);
+  }
+
   /* The message box: one pill, with the send button inside it. */
   .composer {
     position: relative;
