@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { useMutation, useQuery } from 'convex/react'
+import { useAction, useMutation, useQuery } from 'convex/react'
 import { api } from '../convex/_generated/api'
 import type { Id } from '../convex/_generated/dataModel'
 import './App.css'
@@ -632,6 +632,185 @@ function History({
   )
 }
 
+// A short two-note chime when a fall starts waiting for the family. Browsers only allow
+// sound after the person has touched the page, so on a page nobody has touched it stays
+// silent; the pink panel and the Pushover alert carry the news either way.
+const TONE_NOTES_HZ = [660, 880]
+const TONE_NOTE_SECONDS = 0.22
+const TONE_VOLUME = 0.18
+
+function playAlertTone() {
+  try {
+    if (navigator.userActivation && !navigator.userActivation.hasBeenActive) return
+    const context = new AudioContext()
+    TONE_NOTES_HZ.forEach((hz, i) => {
+      const start = context.currentTime + i * TONE_NOTE_SECONDS
+      const oscillator = context.createOscillator()
+      const gain = context.createGain()
+      oscillator.type = 'sine'
+      oscillator.frequency.value = hz
+      gain.gain.setValueAtTime(0, start)
+      gain.gain.linearRampToValueAtTime(TONE_VOLUME, start + 0.02)
+      gain.gain.exponentialRampToValueAtTime(0.001, start + TONE_NOTE_SECONDS)
+      oscillator.connect(gain).connect(context.destination)
+      oscillator.start(start)
+      oscillator.stop(start + TONE_NOTE_SECONDS)
+    })
+    setTimeout(() => void context.close(), TONE_NOTES_HZ.length * TONE_NOTE_SECONDS * 1000 + 200)
+  } catch {
+    // No audio on this device: nothing to do.
+  }
+}
+
+// Plays the chime once each time a different fall becomes the one waiting on the family.
+function AlertTone({ urgentId }: { urgentId: string | null }) {
+  const lastId = useRef<string | null | undefined>(undefined)
+  useEffect(() => {
+    // Not on the first render: a fall that was already waiting when the page opened
+    // is not news, and the browser would block the sound anyway.
+    if (lastId.current !== undefined && urgentId !== null && urgentId !== lastId.current) {
+      playAlertTone()
+    }
+    lastId.current = urgentId
+  }, [urgentId])
+  return null
+}
+
+// "08:00" (24 h, as stored) -> "8:00 AM".
+function formatPillTime(time: string): string {
+  const [hours, minutes] = time.split(':').map(Number)
+  const date = new Date()
+  date.setHours(hours, minutes, 0, 0)
+  return timeFormat.format(date)
+}
+
+// Emily's summary of the day, written on request from the activity feed.
+function Summary({ overview, now }: { overview: Overview; now: number }) {
+  const generate = useAction(api.reports.generate)
+  const [busy, setBusy] = useState(false)
+  const [problem, setProblem] = useState<string | null>(null)
+  const report = overview.latestReport
+
+  const write = async () => {
+    setBusy(true)
+    setProblem(null)
+    try {
+      const result = await generate({ deviceId: DEVICE_ID })
+      if (!result.ok) setProblem(result.text)
+    } catch {
+      setProblem('No connection. Check your internet and try again.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className="care">
+      <h2>Summary</h2>
+      {report ? (
+        <>
+          <p className="summary-text">{report.text}</p>
+          <p className="care-note">
+            Written {dayLabel(report.createdAt, now).toLowerCase()} at {timeFormat.format(report.createdAt)}
+          </p>
+        </>
+      ) : (
+        <p className="quiet">Emily can write a short summary of the last 24 hours.</p>
+      )}
+      {problem && (
+        <p className="error" role="alert">
+          {problem}
+        </p>
+      )}
+      <button type="button" className="quiet-button" onClick={write} disabled={busy}>
+        {busy ? 'Writing…' : report ? 'Write a new summary' : 'Summarize today'}
+      </button>
+    </section>
+  )
+}
+
+// Pill reminders: Emily says them on the watch at the set time, every day.
+function Pills({ overview }: { overview: Overview }) {
+  const addPill = useMutation(api.portal.addPill)
+  const removePill = useMutation(api.portal.removePill)
+  const [name, setName] = useState('')
+  const [time, setTime] = useState('08:00')
+  const [busy, setBusy] = useState(false)
+  const [problem, setProblem] = useState<string | null>(null)
+
+  const add = async (event: React.FormEvent) => {
+    event.preventDefault()
+    if (name.trim() === '') {
+      setProblem('Type the name of the pill first.')
+      return
+    }
+    setBusy(true)
+    setProblem(null)
+    try {
+      const result = await addPill({ deviceId: DEVICE_ID, name: name.trim(), time })
+      if (result.ok) setName('')
+      else setProblem(result.error ?? 'That did not save. Try again.')
+    } catch {
+      setProblem('No connection. Check your internet and try again.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className="care">
+      <h2>Pill reminders</h2>
+      {overview.pills.length === 0 ? (
+        <p className="quiet">
+          None yet. Add one and Emily will remind {overview.personName} on the watch every day at that time.
+        </p>
+      ) : (
+        <ul className="pills">
+          {overview.pills.map((pill) => (
+            <li key={pill._id}>
+              <span className="pill-time">{formatPillTime(pill.time)}</span>
+              <span className="pill-name">{pill.name}</span>
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => void removePill({ pillId: pill._id })}
+                aria-label={`Remove the ${pill.name} reminder`}
+              >
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <form className="pill-form" onSubmit={add}>
+        <label>
+          <span>Pill</span>
+          <input
+            type="text"
+            value={name}
+            maxLength={40}
+            placeholder="Blood pressure"
+            onChange={(event) => setName(event.target.value)}
+          />
+        </label>
+        <label>
+          <span>Time</span>
+          <input type="time" value={time} required onChange={(event) => setTime(event.target.value)} />
+        </label>
+        <button type="submit" className="quiet-button" disabled={busy}>
+          {busy ? 'Adding…' : 'Add reminder'}
+        </button>
+      </form>
+      {problem && (
+        <p className="error" role="alert">
+          {problem}
+        </p>
+      )}
+    </section>
+  )
+}
+
 function App() {
   const overview = useQuery(api.portal.overview, { deviceId: DEVICE_ID })
   // The activity feed, for the step-by-step view of each fall.
@@ -694,8 +873,14 @@ function App() {
     }
   }
 
+  // The fall that is waiting on the family right now, if any (same test as NowPanel).
+  const newest = overview.incidents[0]
+  const urgentId =
+    newest !== undefined && isOpen(newest) && now - newest.createdAt < FRESH_FALL_MS ? newest._id : null
+
   return (
     <main>
+      <AlertTone urgentId={urgentId} />
       <NowPanel overview={overview} now={now} who={activeWho} onGo={go} onFalseAlarm={falseAlarm} />
       <div className="page">
         {error && (
@@ -704,6 +889,8 @@ function App() {
           </p>
         )}
         <History overview={overview} eventsByFall={eventsByFall} now={now} who={activeWho} onGo={go} onFalseAlarm={falseAlarm} />
+        <Summary overview={overview} now={now} />
+        <Pills overview={overview} />
       </div>
     </main>
   )

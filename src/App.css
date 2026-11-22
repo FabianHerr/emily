@@ -535,6 +535,124 @@
   box-shadow: none;
 }
 
+/* ---------- Summary and pill reminders ---------- */
+
+.care {
+  margin-top: 44px;
+}
+
+.care h2 {
+  margin-bottom: 8px;
+  font-family: var(--round);
+  font-size: 1.3rem;
+  font-weight: 700;
+}
+
+.summary-text {
+  font-size: 1.08rem;
+  line-height: 1.5;
+  max-width: 62ch;
+}
+
+.care-note {
+  margin-top: 6px;
+  font-size: 0.88rem;
+  color: var(--ink-soft);
+}
+
+/* A secondary action on the white page: outlined in Emily's green. */
+.quiet-button {
+  min-height: 46px;
+  margin-top: 14px;
+  padding: 0 18px;
+  border: 1.5px solid var(--green-deep);
+  border-radius: 14px;
+  background: none;
+  color: var(--green-deep);
+  font-weight: 650;
+  cursor: pointer;
+  transition: background-color 160ms ease-out;
+}
+
+.quiet-button:hover {
+  background: var(--green-soft);
+}
+
+.quiet-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.pills li {
+  display: grid;
+  grid-template-columns: 5.6rem 1fr auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  border-bottom: 1px solid var(--line);
+}
+
+.pill-time {
+  font-weight: 620;
+  font-variant-numeric: tabular-nums;
+}
+
+.pill-name {
+  overflow-wrap: anywhere;
+}
+
+.pills .text-button {
+  min-height: 44px;
+  color: var(--ink-soft);
+}
+
+.pill-form {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: end;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.pill-form label {
+  display: grid;
+  gap: 4px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+
+.pill-form input {
+  min-height: 46px;
+  width: 100%;
+  padding: 0 12px;
+  border: 1.5px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  font: inherit;
+  color: var(--ink);
+}
+
+.pill-form input::placeholder {
+  color: #696e6c;
+}
+
+.pill-form input:focus-visible {
+  outline: 3px solid var(--green-deep);
+  outline-offset: 1px;
+  border-color: var(--green-deep);
+}
+
+.pill-form .quiet-button {
+  grid-column: 1 / -1;
+  justify-self: start;
+  margin-top: 2px;
+}
+
+.care .error {
+  margin-top: 12px;
+}
+
 /* ---------- Tablet ---------- */
 
 @media (min-width: 700px) {
@@ -626,6 +744,19 @@
   .history h2 {
     margin-top: 0;
     font-size: 1.7rem;
+  }
+
+  .care h2 {
+    font-size: 1.5rem;
+  }
+
+  .pill-form {
+    grid-template-columns: 1fr 9rem auto;
+  }
+
+  .pill-form .quiet-button {
+    grid-column: auto;
+    margin-top: 0;
   }
 
   .fall-head {
