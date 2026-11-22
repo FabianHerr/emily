@@ -90,6 +90,7 @@ const size_t MAX_REPLY_WAV_BYTES = 1024 * 1024;  // reject anything bigger (3 s 
 const uint8_t VIBRATION_BEFORE_REPLY = 1;     // one buzz before Emily speaks
 const uint8_t VIBRATION_TEXT_ONLY = 2;        // two buzzes when there is only text (plan C)
 const size_t REPLY_TEXT_MAX = 256;
+const float REPLY_GAIN_DB = 9.0f;             // Emily's replies are quiet; speaker is already at 100
 
 // Round 2 and follow-up (CJ-17).
 const uint32_t ROUND2_TIMEOUT_MS = 20000;     // card says 10 s, but Convex takes ~12-15 s to reply
@@ -704,6 +705,20 @@ bool playReply(const uint8_t *w, size_t n) {
       AudioOutputIf *out = instance.getAudioOutput();
       out->setVolume(SPEAKER_VOLUME);
       out->open(bits, ch, rate);
+      // Louder: gain with a soft limiter (same idea as LilyGoLib's mic gain). The buffer is
+      // ours (downloaded into PSRAM), so it is changed in place.
+      if (bits == 16 && REPLY_GAIN_DB > 0) {
+        int16_t *pcm = (int16_t *)(w + p + 8);
+        float g = powf(10.0f, REPLY_GAIN_DB / 20.0f);
+        for (size_t i = 0; i < len / 2; i++) {
+          float v = pcm[i] * g;
+          if (v > 24576.0f) v = 24576.0f + (v - 24576.0f) * 0.3f;
+          else if (v < -24576.0f) v = -24576.0f + (v + 24576.0f) * 0.3f;
+          if (v > 32767.0f) v = 32767.0f;
+          if (v < -32768.0f) v = -32768.0f;
+          pcm[i] = (int16_t)v;
+        }
+      }
       out->write((uint8_t *)w + p + 8, len);
       out->close();
       return true;
