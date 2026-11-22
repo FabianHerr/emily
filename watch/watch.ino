@@ -78,6 +78,14 @@ const uint8_t VIBRATION_BEFORE_REPLY = 1;     // one buzz before Emily speaks
 const uint8_t VIBRATION_TEXT_ONLY = 2;        // two buzzes when there is only text (plan C)
 const size_t REPLY_TEXT_MAX = 256;
 
+// Round 2 and follow-up (CJ-17).
+const uint32_t ROUND2_TIMEOUT_MS = 20000;     // card says 10 s, but Convex takes ~12-15 s to reply
+                                              // today (decided with Sebastian, 21 nov); lower it when faster
+const uint32_t FOLLOW_UP_MS = 5UL * 60 * 1000;  // after the last round, listen 5 min, then back to idle
+const uint32_t ALARM_BUZZ_MS = 2000;          // no connection: buzz every 2 s until it is sent
+const uint8_t *const ROUND2_WAV = are_you_ok_wav;  // TODO: are_you_ok_2.h ("Rosa, it's Emily again")
+const size_t ROUND2_WAV_LEN = are_you_ok_wav_len;
+
 struct AccelSample {
   uint32_t tMs;
   float x, y, z;  // g
@@ -138,15 +146,49 @@ volatile uint32_t fastPollUntilMs = 0;
 volatile uint32_t rushPollUntilMs = 0;
 uint32_t recordEndMs = 0;          // to measure "recording ends -> watch speaks"
 
+// Conversation after a fall (CJ-17). Only loop() changes it.
+enum class Flow { Idle, Asking1, Waiting1, Asking2, Waiting2, FollowUp };
+Flow flow = Flow::Idle;
+uint32_t flowSinceMs = 0;
+bool replySeen = false;                 // any message from /poll since round 1
+volatile int roundToSend = 1;           // handed to the send task with the recording
+volatile bool round1Ended = false;      // send task: round 1 upload finished (or first failed)
+volatile uint32_t round1EndedMs = 0;
+volatile bool round2Ended = false;
+volatile bool replyIncoming = false;    // send task took a message and is downloading its voice
+uint32_t lastAlarmBuzzMs = 0;
+
 // The question and the recording block for ~8 s, so they run from loop(), not from a UI callback.
 bool askRequested = false;
+int askRound = 1;
 int recordingsDone = 0;
 
 // Screen.
 lv_obj_t *statusLabel;
 lv_obj_t *valuesLabel;
 lv_obj_t *wifiLabel;
+lv_obj_t *stateLabel;                   // current Flow in a corner (helps debugging)
 uint32_t nextWifiRefreshMs = 0;
+
+const char *flowName(Flow f) {
+  switch (f) {
+    case Flow::Idle: return "IDLE";
+    case Flow::Asking1: return "ASKING_1";
+    case Flow::Waiting1: return "WAITING_1";
+    case Flow::Asking2: return "ASKING_2";
+    case Flow::Waiting2: return "WAITING_2";
+    case Flow::FollowUp: return "FOLLOW_UP";
+  }
+  return "?";
+}
+
+void setFlow(Flow f) {
+  flow = f;
+  flowSinceMs = millis();
+  if (f == Flow::FollowUp) fastPollUntilMs = millis() + FOLLOW_UP_MS;  // poll every 3 s all along
+  if (stateLabel) lv_label_set_text(stateLabel, flowName(f));
+  Serial.printf("FLOW %s\n", flowName(f));
+}
 
 void addSample(const AccelSample &s) {
   history[historyHead] = s;
@@ -204,7 +246,11 @@ void onFall(const FallEvent &f) {
                 f.impactMaxG, f.secondsStill, f.positionChanged, f.freeFall);
   // Round 1: fall -> vibrate -> "Are you OK?" -> record 5 s -> POST /fall with the audio.
   fallToSend = f;
+  replySeen = false;
+  replyIncoming = false;
+  askRound = 1;
   askRequested = true;
+  setFlow(Flow::Asking1);
 }
 
 // Loudness of a 16-bit recording, to tune MIC_GAIN_DB (0 dB = full scale).
@@ -230,15 +276,17 @@ void refreshScreenNow() {
 
 // Blocking: ~3 s question + 0.3 s + 5 s recording. The fall is already detected, so pausing
 // the accelerometer here is fine. The recording is handed to the send task, which frees it.
-void askAndRecord() {
+void askAndRecord(int round) {
   AudioOutputIf *out = instance.getAudioOutput();
   AudioInputIf *in = instance.getAudioInput();
   audioBusy = true;
+  if (round == 2) vibrate();
 
   lv_label_set_text(statusLabel, "Are you OK?");
   refreshScreenNow();
   out->setVolume(SPEAKER_VOLUME);
-  out->playWAV((uint8_t *)are_you_ok_wav, are_you_ok_wav_len);
+  if (round == 1) out->playWAV((uint8_t *)are_you_ok_wav, are_you_ok_wav_len);
+  else out->playWAV((uint8_t *)ROUND2_WAV, ROUND2_WAV_LEN);
   delay(AFTER_QUESTION_MS);
 
   lv_label_set_text(statusLabel, "Listening...");
@@ -270,10 +318,14 @@ void askAndRecord() {
   uint8_t *older = audioToSend;
   audioToSend = wav;
   audioToSendLen = wav ? wavSize : 0;
+  roundToSend = round;
+  if (round == 1) round1Ended = false;
+  else round2Ended = false;
   sendStatus = SendStatus::Sending;  // so the screen never shows the previous fall's status
   sendRequested = true;
   taskEXIT_CRITICAL(&handoffMux);
   if (older) free(older);
+  setFlow(round == 1 ? Flow::Waiting1 : Flow::Waiting2);
 
   shownSendStatus = SendStatus::Idle;
   lv_label_set_text(statusLabel, "Fall detected");
@@ -302,15 +354,17 @@ bool waitForWifi(uint32_t maxMs) {
 
 // One POST /fall with an optional WAV body (len 0 = no audio). Returns the HTTP code
 // (negative = network error) and fills incidentId on 200.
-int postFall(const FallEvent &f, uint8_t *audio, size_t len, uint32_t timeoutMs) {
+int postFall(const FallEvent &f, int round, uint8_t *audio, size_t len, uint32_t timeoutMs) {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("SEND no WiFi");
     return -1;
   }
-  String url = String(CONVEX_SITE_URL) + "/fall?device=" + DEVICE_ID + "&round=1" +
+  String url = String(CONVEX_SITE_URL) + "/fall?device=" + DEVICE_ID + "&round=" + String(round) +
                "&impact=" + String(f.impactMaxG, 2) + "&still=" + String(f.secondsStill) +
                "&position=" + (f.positionChanged ? "1" : "0") +
                "&confidence=" + String(MODEL_CONFIDENCE, 2);
+  // Round 2 joins round 1's incident. If round 1 never arrived, Convex creates the incident.
+  if (round == 2 && incidentId.length() > 0) url += "&incidentId=" + incidentId;
 
   WiFiClientSecure client;
   client.setInsecure();  // demo only (HANDOFF section 10)
@@ -448,11 +502,13 @@ int pollOnce(bool deliver) {
   Serial.printf("POLL text=\"%s\" askAgain=%d audio=%d%s\n", text.c_str(), askAgain, hasAudio,
                 deliver ? "" : " (old message, dropped)");
   if (!deliver) return 1;
+  replyIncoming = true;  // stops the round-2 timer while the voice downloads
 
   uint8_t *wav = nullptr;
   size_t wavLen = 0;
   // The message is marked delivered before we download, so retry the audio once.
-  if (hasAudio && !getReplyWav(audioUrl, &wav, &wavLen)) getReplyWav(audioUrl, &wav, &wavLen);
+  // With askAgain the voice is not played (the watch asks itself), so do not download it.
+  if (hasAudio && !askAgain && !getReplyWav(audioUrl, &wav, &wavLen)) getReplyWav(audioUrl, &wav, &wavLen);
 
   strlcpy(replyText, text.c_str(), sizeof(replyText));
   replyAskAgain = askAgain;
@@ -488,23 +544,32 @@ void sendTask(void *) {
     FallEvent f = fallToSend;
     uint8_t *audio = audioToSend;
     size_t audioLen = audioToSendLen;
+    int round = roundToSend;
     audioToSend = nullptr;
     audioToSendLen = 0;
     sendRequested = false;
     sendStatus = SendStatus::Sending;
     taskEXIT_CRITICAL(&handoffMux);
+    if (round == 1) incidentId = "";  // a new fall: forget the previous incident
 
     // With audio: wait a little for WiFi (a short hotspot blip should not cost the clip),
     // then one try + one retry. After that, send without audio so the alert still goes out.
     int code = -1;
     for (int i = 0; audio && code != 200 && !isFinalError(code) && i < AUDIO_SEND_TRIES; i++) {
       if (!waitForWifi(AUDIO_WIFI_WAIT_MS)) break;
-      code = postFall(f, audio, audioLen, AUDIO_HTTP_TIMEOUT_MS);
+      code = postFall(f, round, audio, audioLen, AUDIO_HTTP_TIMEOUT_MS);
     }
     if (audio) free(audio);
     if (code != 200 && !isFinalError(code)) {
       noConnectionBuzz = true;
-      code = postFall(f, nullptr, 0, HTTP_TIMEOUT_MS);
+      code = postFall(f, round, nullptr, 0, HTTP_TIMEOUT_MS);
+    }
+    // The round-2 timer starts here, whether the upload worked or not (card CJ-17).
+    if (round == 1) {
+      round1EndedMs = millis();
+      round1Ended = true;
+    } else {
+      round2Ended = true;
     }
     // Keep trying until it is sent or a newer fall replaces it (HANDOFF section 7: the incident
     // goes out when the connection comes back; the server merges repeats within 60 s).
@@ -513,9 +578,11 @@ void sendTask(void *) {
       Serial.printf("SEND retry %d in %lu ms (no audio)\n", retry, (unsigned long)SEND_RETRY_MS);
       vTaskDelay(pdMS_TO_TICKS(SEND_RETRY_MS));
       nudgeWifi();
-      if (WiFi.status() == WL_CONNECTED) code = postFall(f, nullptr, 0, HTTP_TIMEOUT_MS);
+      if (WiFi.status() == WL_CONNECTED) code = postFall(f, round, nullptr, 0, HTTP_TIMEOUT_MS);
     }
     if (isFinalError(code)) Serial.printf("SEND gave up: http=%d\n", code);
+    // Round 1 got through only on a later retry: give Convex the full wait to reply.
+    if (round == 1 && code == 200) round1EndedMs = millis();
     if (sendRequested) continue;  // a newer fall is waiting; its status comes next
     if (code == 200) {
       fastPollUntilMs = millis() + FAST_POLL_WINDOW_MS;
@@ -531,13 +598,51 @@ void updateSendScreen() {
   if (noConnectionBuzz) {
     noConnectionBuzz = false;
     vibrate();  // 3 buzzes when the first attempt fails
+    lastAlarmBuzzMs = millis();
   }
   SendStatus s = sendStatus;
+  // Local alarm while the fall is not sent: buzz every 2 s (not while recording or playing).
+  bool offline = s == SendStatus::Retrying;  // Failed = 400/404: retrying will not help
+  if (offline && !audioBusy && millis() - lastAlarmBuzzMs >= ALARM_BUZZ_MS) {
+    vibrate(1);
+    lastAlarmBuzzMs = millis();
+  }
   if (s == shownSendStatus) return;
   shownSendStatus = s;
   if (s == SendStatus::Sending) lv_label_set_text(statusLabel, "Sending...");
   if (s == SendStatus::Sent) lv_label_set_text(statusLabel, "Help notified");
-  if (s == SendStatus::Retrying || s == SendStatus::Failed) lv_label_set_text(statusLabel, "No connection");
+  if (offline) lv_label_set_text(statusLabel, "No connection.\nCall for help");
+  if (s == SendStatus::Failed) lv_label_set_text(statusLabel, "Send failed");
+}
+
+// CJ-17: what happens next in the conversation. Called from loop().
+void updateFlow() {
+  uint32_t now = millis();
+  switch (flow) {
+    case Flow::Waiting1:
+      // No message at all for 20 s after round 1 was sent (or failed): ask again.
+      if (!replySeen && !replyIncoming && round1Ended &&
+          (int32_t)(now - round1EndedMs) >= (int32_t)ROUND2_TIMEOUT_MS) {
+        Serial.println("ROUND2 timer: no reply after round 1");
+        askRound = 2;
+        askRequested = true;
+        setFlow(Flow::Asking2);
+      }
+      break;
+    case Flow::Waiting2:
+      if (round2Ended) setFlow(Flow::FollowUp);  // never a third question
+      break;
+    case Flow::FollowUp:
+      if (now - flowSinceMs >= FOLLOW_UP_MS) {
+        setFlow(Flow::Idle);
+        lv_label_set_text(statusLabel, "Watching");
+        lv_label_set_text(valuesLabel, "");
+        shownSendStatus = SendStatus::Idle;  // keep showing "No connection" if still offline
+      }
+      break;
+    default:
+      break;
+  }
 }
 
 // Plays a WAV after checking its header ourselves: LilyGoLib's playWAV trusts the sizes in
@@ -575,6 +680,25 @@ bool playReply(const uint8_t *w, size_t n) {
 
 // Called from loop() when the send task got a message from /poll.
 void handleReply() {
+  // askAgain = Convex did not understand round 1. The watch asks round 2 with its own
+  // question, so Emily's text/voice for it is skipped (otherwise Rosa hears it twice).
+  // Agreed with Fabian's side: when askAgain is true the watch ignores text and audioUrl.
+  if (replyAskAgain) {
+    if (replyWav) free(replyWav);
+    replyWav = nullptr;
+    replySeen = true;
+    replyReady = false;
+    if (flow == Flow::Waiting1) {
+      Serial.println("ROUND2 askAgain from Convex (its question is skipped)");
+      askRound = 2;
+      askRequested = true;
+      setFlow(Flow::Asking2);
+    } else {
+      Serial.println("REPLY askAgain ignored (already asked twice)");
+    }
+    return;
+  }
+
   audioBusy = true;
   bool hasText = replyText[0] != '\0';
   if (hasText) {
@@ -593,10 +717,13 @@ void handleReply() {
     replyWav = nullptr;
   }
   if (!spoke && hasText) vibrate(VIBRATION_TEXT_ONLY);  // plan C: text only
-  if (replyAskAgain) Serial.println("REPLY askAgain=1 (round 2 comes in CJ-17)");
+  replySeen = true;
   replyReady = false;
   audioBusy = false;
   nextSampleMs = millis();
+
+  // A real answer to round 1: no second question, just listen for "... is on the way".
+  if (flow == Flow::Waiting1) setFlow(Flow::FollowUp);
 }
 
 void updateWifiScreen() {
@@ -669,7 +796,8 @@ void finishWatching() {
 
 void updateDetector(const AccelSample &s) {
   if (detectorState == DetectorState::Idle) {
-    if (s.mag > TRIGGER_G && (int32_t)(s.tMs - cooldownUntilMs) >= 0) startWatching(s);
+    // Only a new conversation can start a new fall (CJ-17: detect again once back to IDLE).
+    if (flow == Flow::Idle && s.mag > TRIGGER_G && (int32_t)(s.tMs - cooldownUntilMs) >= 0) startWatching(s);
     return;
   }
 
@@ -691,6 +819,12 @@ void updateDetector(const AccelSample &s) {
 
 void onSimulateFall(lv_event_t *e) {
   if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  // Not in the middle of a conversation (and never re-entrantly from a blocking step, where
+  // refreshScreenNow() runs the UI): that would ask a third time and confuse the server.
+  if (audioBusy || (flow != Flow::Idle && flow != Flow::FollowUp)) {
+    Serial.printf("SIMULATE ignored in %s\n", flowName(flow));
+    return;
+  }
   Serial.println("SIMULATE fall button");
   detectorState = DetectorState::Idle;
   onFall({SIMULATED_IMPACT_G, (int)(STILL_WATCH_MS / 1000), true, false, millis()});
@@ -714,7 +848,12 @@ void setupScreen() {
   wifiLabel = lv_label_create(lv_screen_active());
   lv_obj_set_style_text_font(wifiLabel, &lv_font_montserrat_16, 0);
   lv_label_set_text(wifiLabel, "No WiFi");
-  lv_obj_align(wifiLabel, LV_ALIGN_BOTTOM_MID, 0, -66);
+  lv_obj_align(wifiLabel, LV_ALIGN_BOTTOM_RIGHT, -10, -66);
+
+  stateLabel = lv_label_create(lv_screen_active());
+  lv_obj_set_style_text_font(stateLabel, &lv_font_montserrat_14, 0);
+  lv_label_set_text(stateLabel, flowName(flow));
+  lv_obj_align(stateLabel, LV_ALIGN_BOTTOM_LEFT, 10, -68);
 
   lv_obj_t *btn = lv_button_create(lv_screen_active());
   lv_obj_set_size(btn, 200, 50);
@@ -759,9 +898,10 @@ void loop() {
   lv_timer_handler();
   if (askRequested) {
     askRequested = false;
-    askAndRecord();
+    askAndRecord(askRound);
   }
   if (replyReady) handleReply();
+  updateFlow();
   updateSendScreen();
   updateWifiScreen();
 
