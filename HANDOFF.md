@@ -458,7 +458,7 @@ Primero el camino completo con lo mínimo; después se mejora cada pieza.
 
 | # | Tarea | Quién | Espera a | Prioridad |
 |---|---|---|---|---|
-| CJ-26 | Congelar el código (8 AM), ensayar la demo, grabar video de respaldo | F+S | CJ-18 | Imp. |
+| CJ-26 | Congelar el código (11:30 AM, antes era 8 AM), ensayar la demo, grabar video de respaldo | F+S | CJ-18 | Imp. |
 | CJ-27 | Check-in 10:00 AM y entrega 12:00 PM | F+S | CJ-26 | Imp. |
 
 No existe CJ-31: se propuso "actividad inusual" y Fabian la descartó.
