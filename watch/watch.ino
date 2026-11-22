@@ -17,6 +17,8 @@
 #include "fall_model.h"         // CJ-22: Random Forest from ml/watch_model (emlearn)
 #include "fall_threshold.h"
 #include "model_test_cases.h"   // ml/watch_model/test_cases.csv, for the self-test
+#define USE_EMILY_FACE 1        // 0 = old text screen
+#include "emily_face.h"         // CJ-30: Emily's cloud face (Fabian)
 
 // ---- Tunable constants ----
 const uint32_t SERIAL_BAUD = 115200;
@@ -115,6 +117,7 @@ struct FallEvent {
   uint32_t atMs;
   float confidence;  // model score (CJ-22), sent as &confidence=
   uint32_t fallNumber;  // set by onFall; with bootId makes &fallId= (same for both rounds)
+  bool manual;          // CJ-30: "Help" button on Emily's screen, sent as &manual=1
 };
 
 // fallId = "<bootId>-<fallNumber>": unique per fall, the same for its retries and its round 2,
@@ -253,6 +256,62 @@ void vibrate(uint8_t repeats = VIBRATION_REPEATS) {
   instance.drv.run();
 }
 
+// ---- CJ-30: Emily's face. Called only from loop() (LVGL is not thread-safe). ----
+volatile bool helpRequested = false;  // "Help" tapped on Emily's screen
+
+void onEmilyHelp() { helpRequested = true; }
+
+// Emily asks: worried face, only the "Help" button. "I'm OK" stays hidden until Convex
+// accepts answer=ok (without it, cancelling would let the last defence send an emergency).
+void faceAsking(const char *caption) {
+#if USE_EMILY_FACE
+  emilyFaceSetMood(EmilyMood::Worried);
+  emilyFaceSetCaption(caption);
+  emilyFaceShowButtons(nullptr, onEmilyHelp);
+  lv_obj_add_flag(emilyOkBtn, LV_OBJ_FLAG_HIDDEN);
+#endif
+}
+
+void faceMood(EmilyMood mood, const char *caption) {
+#if USE_EMILY_FACE
+  emilyFaceSetMood(mood);
+  if (caption) emilyFaceSetCaption(caption);
+#endif
+}
+
+// "Help" on Emily's screen: emergency now. Sent as round 2 of the current fall, without audio,
+// with &manual=1. Convex treats a silent round 2 as an emergency today, so this alerts even
+// before it reads answer/manual. Called from loop() only.
+void handleHelpRequest() {
+  helpRequested = false;
+  Serial.println("HELP button: emergency");
+  vibrate();
+  taskENTER_CRITICAL(&handoffMux);
+  FallEvent f = fallToSend;  // same fall (same fallId) as the question on screen
+  f.manual = true;
+  fallToSend = f;
+  uint8_t *older = audioToSend;
+  audioToSend = nullptr;
+  audioToSendLen = 0;
+  roundToSend = 2;
+  round2Ended = false;
+  sendStatus = SendStatus::Sending;
+  sendRequested = true;
+  taskEXIT_CRITICAL(&handoffMux);
+  if (older) free(older);
+  askRequested = false;     // no more questions
+  setFlow(Flow::FollowUp);  // listen for "... is on the way"
+  faceMood(EmilyMood::Worried, "Calling your\nfamily...");
+}
+
+void faceCalm() {
+#if USE_EMILY_FACE
+  emilyFaceSetMood(EmilyMood::Calm);
+  emilyFaceSetCaption("");
+  emilyFaceHideButtons();
+#endif
+}
+
 void showFall(const FallEvent &f) {
   lv_label_set_text(statusLabel, "Fall detected");
   lv_label_set_text_fmt(valuesLabel, "impact: %.2f g\nstill: %d s\nposition: %s\nfree fall: %s",
@@ -277,6 +336,7 @@ void onFall(const FallEvent &f) {
   askRound = 1;
   askRequested = true;
   setFlow(Flow::Asking1);
+  faceAsking("Are you OK?");
 }
 
 // Loudness of a 16-bit recording, to tune MIC_GAIN_DB (0 dB = full scale).
@@ -309,6 +369,8 @@ void askAndRecord(int round) {
   if (round == 2) vibrate();
 
   lv_label_set_text(statusLabel, "Are you OK?");
+  if (round == 2) faceAsking("Are you OK?");
+  faceMood(EmilyMood::Talking, "Are you OK?");  // playWAV blocks, so the mouth just stays open
   refreshScreenNow();
   out->setVolume(SPEAKER_VOLUME);
   if (round == 1) out->playWAV((uint8_t *)are_you_ok_wav, are_you_ok_wav_len);
@@ -316,6 +378,7 @@ void askAndRecord(int round) {
   delay(AFTER_QUESTION_MS);
 
   lv_label_set_text(statusLabel, "Listening...");
+  faceMood(EmilyMood::Worried, "Listening...");
   refreshScreenNow();
   uint8_t *wav = nullptr;
   size_t wavSize = 0;
@@ -355,6 +418,7 @@ void askAndRecord(int round) {
 
   shownSendStatus = SendStatus::Idle;
   lv_label_set_text(statusLabel, "Fall detected");
+  faceMood(EmilyMood::Worried, "Thank you.\nOne moment...");
   audioBusy = false;
   nextSampleMs = millis();  // restart sampling cleanly after the pause
 }
@@ -392,6 +456,7 @@ int postFall(const FallEvent &f, int round, uint8_t *audio, size_t len, uint32_t
   // Round 2 joins round 1's incident. If round 1 never arrived, Convex creates the incident.
   if (round == 2 && incidentId.length() > 0) url += "&incidentId=" + incidentId;
   url += "&fallId=" + String(bootId, HEX) + "-" + String(f.fallNumber);
+  if (f.manual) url += "&manual=1";
 
   WiFiClientSecure client;
   client.setInsecure();  // demo only (HANDOFF section 10)
@@ -648,7 +713,10 @@ void updateSendScreen() {
   shownSendStatus = s;
   if (s == SendStatus::Sending) lv_label_set_text(statusLabel, "Sending...");
   if (s == SendStatus::Sent) lv_label_set_text(statusLabel, "Help notified");
-  if (offline) lv_label_set_text(statusLabel, "No connection.\nCall for help");
+  if (offline) {
+    lv_label_set_text(statusLabel, "No connection.\nCall for help");
+    faceMood(EmilyMood::Worried, "No connection.\nCall for help");
+  }
   if (s == SendStatus::Failed) lv_label_set_text(statusLabel, "Send failed");
 }
 
@@ -672,6 +740,7 @@ void updateFlow() {
     case Flow::FollowUp:
       if (now - flowSinceMs >= FOLLOW_UP_MS) {
         setFlow(Flow::Idle);
+        faceCalm();
         lv_label_set_text(statusLabel, "Watching");
         lv_label_set_text(valuesLabel, "");
         shownSendStatus = SendStatus::Idle;  // keep showing "No connection" if still offline
@@ -755,6 +824,7 @@ void handleReply() {
   if (hasText) {
     lv_label_set_text(statusLabel, "Emily says:");
     lv_label_set_text(valuesLabel, replyText);
+    faceMood(EmilyMood::Talking, replyText);
     refreshScreenNow();
   }
   bool spoke = false;
@@ -768,6 +838,10 @@ void handleReply() {
     replyWav = nullptr;
   }
   if (!spoke && hasText) vibrate(VIBRATION_TEXT_ONLY);  // plan C: text only
+#if USE_EMILY_FACE
+  emilyFaceSetMood(EmilyMood::Calm);  // keep the text as the caption
+  emilyFaceHideButtons();
+#endif
   replySeen = true;
   replyReady = false;
   audioBusy = false;
@@ -1036,6 +1110,20 @@ void setupScreen() {
   lv_obj_set_style_text_font(btnLabel, &lv_font_montserrat_20, 0);
   lv_label_set_text(btnLabel, "Simulate fall");
   lv_obj_center(btnLabel);
+
+#if USE_EMILY_FACE
+  // Emily's face covers the old text screen. Keep two small things on top for the demo and
+  // debugging: the flow state (top-left) and a small "Sim" button (top-right).
+  emilyFaceCreate(lv_screen_active());
+  lv_obj_set_size(btn, 56, 32);
+  lv_obj_align(btn, LV_ALIGN_TOP_RIGHT, -4, 4);
+  lv_obj_set_style_text_font(btnLabel, &lv_font_montserrat_12, 0);
+  lv_label_set_text(btnLabel, "Sim");
+  lv_obj_move_foreground(btn);
+  lv_obj_set_style_text_color(stateLabel, lv_color_hex(0x16324A), 0);
+  lv_obj_align(stateLabel, LV_ALIGN_TOP_LEFT, 6, 4);
+  lv_obj_move_foreground(stateLabel);
+#endif
 }
 
 void setup() {
@@ -1075,6 +1163,7 @@ void loop() {
     askRequested = false;
     askAndRecord(askRound);
   }
+  if (helpRequested) handleHelpRequest();
   if (replyReady) handleReply();
   updateFlow();
   updateSendScreen();
