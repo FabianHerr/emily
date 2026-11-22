@@ -704,8 +704,25 @@
 }
 
 .msg-avatar svg {
-  width: 24px;
+  width: 28px;
+  overflow: visible;
+}
+
+.msg-avatar-cloud {
   fill: #fff;
+}
+
+.msg-avatar-eyes {
+  fill: var(--ink);
+  transform: translate(calc(var(--gaze-x, 0) * 9px), calc(var(--gaze-y, 0) * 7px));
+  transition: transform 180ms var(--ease-out);
+}
+
+.msg-avatar-mouth {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 9;
+  stroke-linecap: round;
 }
 
 .msg-bubble {

@@ -589,7 +589,16 @@ function FallRow({
     <li className={`msg msg-${kind}`}>
       <span className="msg-avatar" aria-hidden="true">
         <svg viewBox="0 0 200 160">
-          <path d="M50 152C22 152 6 126 17 100c6-14 13-22 13-38 0-22 18-35 37-32C76 11 102 3 124 16c9 5 14 12 27 12 22 0 36 18 32 38-2 12 6 22 10 37 7 27-11 49-37 49Z" />
+          <path
+            className="msg-avatar-cloud"
+            d="M50 152C22 152 6 126 17 100c6-14 13-22 13-38 0-22 18-35 37-32C76 11 102 3 124 16c9 5 14 12 27 12 22 0 36 18 32 38-2 12 6 22 10 37 7 27-11 49-37 49Z"
+          />
+          {/* The eyes lean toward the pointer (--gaze-x / --gaze-y, set once in App). */}
+          <g className="msg-avatar-eyes">
+            <ellipse cx="76" cy="94" rx="12" ry="16" />
+            <ellipse cx="126" cy="94" rx="12" ry="16" />
+          </g>
+          <path className="msg-avatar-mouth" d="M88 122q13 10 26 0" />
         </svg>
       </span>
       <div className="msg-bubble">
@@ -1108,6 +1117,23 @@ function App() {
   const now = useNow()
   const [who, setWho] = useState<string | null>(readWho)
   const [error, setError] = useState<string | null>(null)
+
+  // Where the pointer is, from -1 to 1 across the window, for the small Emily faces in
+  // the chat: one listener for all of them, read in CSS.
+  useEffect(() => {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+    const root = document.documentElement
+    const gaze = (event: PointerEvent) => {
+      root.style.setProperty('--gaze-x', ((event.clientX / window.innerWidth) * 2 - 1).toFixed(2))
+      root.style.setProperty('--gaze-y', ((event.clientY / window.innerHeight) * 2 - 1).toFixed(2))
+    }
+    window.addEventListener('pointermove', gaze, { passive: true })
+    window.addEventListener('pointerdown', gaze, { passive: true })
+    return () => {
+      window.removeEventListener('pointermove', gaze)
+      window.removeEventListener('pointerdown', gaze)
+    }
+  }, [])
 
   if (overview === undefined || overview === null) {
     return (
