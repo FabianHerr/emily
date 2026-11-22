@@ -21,7 +21,7 @@ const WHO_STORAGE_KEY = 'emily.who'
 
 type Overview = NonNullable<ReturnType<typeof useQuery<typeof api.portal.overview>>>
 type Incident = Overview['incidents'][number]
-// Green: all is well. Pink: look here. Plain: nothing to say yet.
+// Calm (lavender): all is well. Alert (rose): look here. Plain: nothing to say yet.
 type Mood = 'calm' | 'alert' | 'plain'
 
 const timeFormat = new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' })
@@ -85,7 +85,7 @@ function spokenWords(transcript: string | null): string | null {
 const isOpen = (incident: Incident) =>
   incident.status === 'emergency' || incident.status === 'precautionary'
 
-// Emily's cloud in her two pastels. Eyes are open and blink now and then (App.css);
+// Emily's cloud in her two colours (lavender and rose). Eyes are open and blink now and then (App.css);
 // when something needs attention her brows lift and the smile goes.
 function EmilyCloud({ mood }: { mood: Mood }) {
   const svgRef = useRef<SVGSVGElement>(null)
@@ -121,17 +121,17 @@ function EmilyCloud({ mood }: { mood: Mood }) {
     <svg ref={svgRef} className={`emily emily-${mood}`} viewBox="0 0 200 160" role="img" aria-label="Emily">
       <defs>
         <linearGradient id="emily-base" x1="0" y1="0.1" x2="1" y2="0.9">
-          <stop offset="0" stopColor="#a6dfbd" />
-          <stop offset="0.52" stopColor="#e3ecd6" />
-          <stop offset="1" stopColor="#f3a9c0" />
+          <stop offset="0" stopColor="#c9bff2" />
+          <stop offset="0.52" stopColor="#efe6f6" />
+          <stop offset="1" stopColor="#f5b3c9" />
         </linearGradient>
-        <radialGradient id="emily-pink" cx="0.2" cy="0.86" r="0.46">
-          <stop offset="0" stopColor="#f7b9cb" />
-          <stop offset="1" stopColor="#f7b9cb" stopOpacity="0" />
+        <radialGradient id="emily-rose" cx="0.2" cy="0.86" r="0.46">
+          <stop offset="0" stopColor="#f9c3d4" />
+          <stop offset="1" stopColor="#f9c3d4" stopOpacity="0" />
         </radialGradient>
-        <radialGradient id="emily-green" cx="0.72" cy="0.18" r="0.42">
-          <stop offset="0" stopColor="#bfe9cf" />
-          <stop offset="1" stopColor="#bfe9cf" stopOpacity="0" />
+        <radialGradient id="emily-lavender" cx="0.72" cy="0.18" r="0.42">
+          <stop offset="0" stopColor="#ddd5f8" />
+          <stop offset="1" stopColor="#ddd5f8" stopOpacity="0" />
         </radialGradient>
         <path
           id="emily-shape"
@@ -139,14 +139,14 @@ function EmilyCloud({ mood }: { mood: Mood }) {
         />
       </defs>
       <use href="#emily-shape" fill="url(#emily-base)" />
-      <use href="#emily-shape" fill="url(#emily-pink)" />
-      <use href="#emily-shape" fill="url(#emily-green)" />
-      <g className="emily-brows" fill="none" stroke="#51645a" strokeOpacity="0.3" strokeWidth="5.5" strokeLinecap="round">
+      <use href="#emily-shape" fill="url(#emily-rose)" />
+      <use href="#emily-shape" fill="url(#emily-lavender)" />
+      <g className="emily-brows" fill="none" stroke="#4a3f73" strokeOpacity="0.3" strokeWidth="5.5" strokeLinecap="round">
         <path className="emily-brow-left" d="M64 68q9-6 18-3" />
         <path className="emily-brow-right" d="M120 65q9-3 18 3" />
       </g>
       <g className="emily-look">
-        <g className="emily-eyes" fill="#46584f">
+        <g className="emily-eyes" fill="#43396b">
           <ellipse cx="76" cy="96" rx="9.5" ry="12.5" />
           <ellipse cx="126" cy="96" rx="9.5" ry="12.5" />
         </g>
@@ -155,7 +155,7 @@ function EmilyCloud({ mood }: { mood: Mood }) {
           <circle cx="129" cy="91" r="3" />
         </g>
       </g>
-      <path className="emily-smile" d="M92 118q9 7 18 0" fill="none" stroke="#46584f" strokeWidth="4.5" strokeLinecap="round" />
+      <path className="emily-smile" d="M92 118q9 7 18 0" fill="none" stroke="#43396b" strokeWidth="4.5" strokeLinecap="round" />
     </svg>
   )
 }
@@ -634,7 +634,7 @@ function History({
 
 // A short two-note chime when a fall starts waiting for the family. Browsers only allow
 // sound after the person has touched the page, so on a page nobody has touched it stays
-// silent; the pink panel and the Pushover alert carry the news either way.
+// silent; the rose panel and the Pushover alert carry the news either way.
 const TONE_NOTES_HZ = [660, 880]
 const TONE_NOTE_SECONDS = 0.22
 const TONE_VOLUME = 0.18

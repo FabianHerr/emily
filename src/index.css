@@ -1,19 +1,19 @@
 :root {
-  /* Emily's two pastels. Green: all is well. Pink: look here. The deep shades are the
-     same hues, dark enough for text and for buttons. The page is a pale mint and the
-     ink a forest green, both taken from Emily's own green, so nothing is plain grey. */
-  --green: #c6e9d3;
-  --green-soft: #e8f5ec;
-  --green-deep: #1d5a3f;
-  --pink: #f6bfcd;
-  --pink-soft: #fdeaef;
-  --pink-deep: #8f1f40;
+  /* Emily's two colours. Lavender (--calm): all is well. Rose (--alert): look here.
+     Both come from her cloud. The deep shades are the same hues, dark enough for text
+     and buttons; the page is a pale lilac and the ink a deep plum, so nothing is grey. */
+  --calm: #dcd5f5;
+  --calm-soft: #f0edfb;
+  --calm-deep: #45327f;
+  --alert: #f8c0d0;
+  --alert-soft: #fdeaf0;
+  --alert-deep: #96184a;
 
-  --paper: #eff7f1;
+  --paper: #f5f3fc;
   --sheet: #ffffff;
-  --ink: #1b3a2a;
-  --ink-soft: #4c6657;
-  --line: #dcebe1;
+  --ink: #2a2250;
+  --ink-soft: #5c557e;
+  --line: #e6e1f4;
 
   --sans: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   /* Rounded like the Emily wordmark; falls back to the system sans. */
@@ -26,9 +26,9 @@
   line-height: 1.45;
   color: var(--ink);
   background: var(--paper);
-  accent-color: var(--green-deep);
-  caret-color: var(--green-deep);
-  scrollbar-color: var(--green) transparent;
+  accent-color: var(--calm-deep);
+  caret-color: var(--calm-deep);
+  scrollbar-color: var(--calm) transparent;
   -webkit-text-size-adjust: 100%;
 }
 
@@ -37,7 +37,7 @@
 }
 
 ::selection {
-  background: var(--green);
+  background: var(--calm);
   color: var(--ink);
 }
 
@@ -67,7 +67,7 @@ button {
 }
 
 :focus-visible {
-  outline: 3px solid var(--green-deep);
+  outline: 3px solid var(--calm-deep);
   outline-offset: 3px;
   border-radius: 6px;
 }

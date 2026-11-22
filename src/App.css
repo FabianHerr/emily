@@ -1,21 +1,21 @@
 /* ---------- Now: is she OK right now? ---------- */
 
 .now {
-  --tone: var(--green-deep);
-  background: var(--green);
+  --tone: var(--calm-deep);
+  background: var(--calm);
   color: var(--tone);
   border-radius: 0 0 36px 36px;
   transition: background-color 600ms var(--ease-out), color 600ms var(--ease-out);
 }
 
 .now-alert {
-  --tone: var(--pink-deep);
-  background: var(--pink);
+  --tone: var(--alert-deep);
+  background: var(--alert);
 }
 
 .now-plain {
   --tone: var(--ink);
-  background: var(--green-soft);
+  background: var(--calm-soft);
 }
 
 .now-inner,
@@ -177,7 +177,7 @@
   padding: 0 20px;
   border: 0;
   border-radius: 999px;
-  background: var(--pink-deep);
+  background: var(--alert-deep);
   color: #fff;
   font-family: var(--round);
   font-size: 1.2rem;
@@ -294,8 +294,8 @@
   margin-top: 16px;
   padding: 12px 14px;
   border-radius: 12px;
-  background: var(--pink-soft);
-  color: var(--pink-deep);
+  background: var(--alert-soft);
+  color: var(--alert-deep);
   font-weight: 550;
 }
 
@@ -346,36 +346,36 @@
 
 .tab[aria-selected='true'] {
   color: var(--sheet);
-  background: var(--green-deep);
-  border-color: var(--green-deep);
+  background: var(--calm-deep);
+  border-color: var(--calm-deep);
 }
 
 .tab-count {
   min-width: 1.9em;
   padding: 2px 8px;
   border-radius: 999px;
-  background: var(--green-soft);
-  color: var(--green-deep);
+  background: var(--calm-soft);
+  color: var(--calm-deep);
   font-size: 0.82rem;
   font-weight: 650;
   text-align: center;
   font-variant-numeric: tabular-nums;
 }
 
-/* Falls are waiting: the New tab says so in pink. */
+/* Falls are waiting: the New tab says so in the alert colour. */
 .tab-urgent .tab-count {
-  background: var(--pink-deep);
+  background: var(--alert-deep);
   color: #fff;
 }
 
 .tab-urgent[aria-selected='true'] {
-  background: var(--pink-deep);
-  border-color: var(--pink-deep);
+  background: var(--alert-deep);
+  border-color: var(--alert-deep);
 }
 
 .tab-urgent[aria-selected='true'] .tab-count {
   background: #fff;
-  color: var(--pink-deep);
+  color: var(--alert-deep);
 }
 
 #falls-panel > .quiet {
@@ -415,8 +415,8 @@
   width: 34px;
   height: 34px;
   border-radius: 50%;
-  background: var(--green-soft);
-  color: var(--green-deep);
+  background: var(--calm-soft);
+  color: var(--calm-deep);
 }
 
 .fall-mark svg {
@@ -425,8 +425,8 @@
 }
 
 .fall-mark-alert {
-  background: var(--pink);
-  color: var(--pink-deep);
+  background: var(--alert);
+  color: var(--alert-deep);
 }
 
 .fall-mark-wait {
@@ -535,7 +535,7 @@
 
 .go-link {
   min-height: 40px;
-  color: var(--pink-deep);
+  color: var(--alert-deep);
 }
 
 .go-link:disabled {
@@ -577,14 +577,14 @@
   color: var(--ink-soft);
 }
 
-/* A secondary action on the white page: outlined in Emily's green. */
+/* A secondary action on the white page: a filled pill in Emily's deep lavender. */
 .quiet-button {
   min-height: 46px;
   margin-top: 14px;
   padding: 0 22px;
   border: 0;
   border-radius: 999px;
-  background: var(--green-deep);
+  background: var(--calm-deep);
   color: var(--sheet);
   font-weight: 650;
   cursor: pointer;
@@ -653,13 +653,13 @@
 }
 
 .pill-form input::placeholder {
-  color: #696e6c;
+  color: #6b6588;
 }
 
 .pill-form input:focus-visible {
-  outline: 3px solid var(--green-deep);
+  outline: 3px solid var(--calm-deep);
   outline-offset: 1px;
-  border-color: var(--green-deep);
+  border-color: var(--calm-deep);
 }
 
 .pill-form .quiet-button {
