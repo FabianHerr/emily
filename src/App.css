@@ -81,7 +81,8 @@
   width: 76px;
   height: auto;
   flex: none;
-  filter: drop-shadow(0 5px 8px rgb(38 41 42 / 0.14));
+  /* The soft shadow on the ground is drawn inside the SVG. */
+  overflow: visible;
 }
 
 .emily-eyes ellipse,
@@ -653,7 +654,7 @@
 }
 
 .pill-form input::placeholder {
-  color: #6b6588;
+  color: #64778a;
 }
 
 .pill-form input:focus-visible {
@@ -747,7 +748,6 @@
   .emily {
     width: 210px;
     margin-left: -8px;
-    filter: drop-shadow(0 14px 18px rgb(38 41 42 / 0.14));
   }
 
   .wordmark {

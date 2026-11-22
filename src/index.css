@@ -1,19 +1,19 @@
 :root {
-  /* Emily's two colours. Lavender (--calm): all is well. Rose (--alert): look here.
-     Both come from her cloud. The deep shades are the same hues, dark enough for text
-     and buttons; the page is a pale lilac and the ink a deep plum, so nothing is grey. */
-  --calm: #dcd5f5;
-  --calm-soft: #f0edfb;
-  --calm-deep: #45327f;
-  --alert: #f8c0d0;
-  --alert-soft: #fdeaf0;
-  --alert-deep: #96184a;
+  /* Emily's two colours. Sky blue (--calm): all is well. Warm coral (--alert): look
+     here. The deep shades are the same hues, dark enough for text and buttons; the
+     page is a pale sky tint and the ink a deep navy, so nothing is plain grey. */
+  --calm: #cde5f7;
+  --calm-soft: #eaf4fb;
+  --calm-deep: #1d4c78;
+  --alert: #ffc8b4;
+  --alert-soft: #ffece5;
+  --alert-deep: #9a2b13;
 
-  --paper: #f5f3fc;
+  --paper: #f2f8fc;
   --sheet: #ffffff;
-  --ink: #2a2250;
-  --ink-soft: #5c557e;
-  --line: #e6e1f4;
+  --ink: #16324a;
+  --ink-soft: #4d6379;
+  --line: #dce8f1;
 
   --sans: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   /* Rounded like the Emily wordmark; falls back to the system sans. */

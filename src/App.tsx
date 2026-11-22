@@ -21,7 +21,7 @@ const WHO_STORAGE_KEY = 'emily.who'
 
 type Overview = NonNullable<ReturnType<typeof useQuery<typeof api.portal.overview>>>
 type Incident = Overview['incidents'][number]
-// Calm (lavender): all is well. Alert (rose): look here. Plain: nothing to say yet.
+// Calm (sky blue): all is well. Alert (coral): look here. Plain: nothing to say yet.
 type Mood = 'calm' | 'alert' | 'plain'
 
 const timeFormat = new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' })
@@ -85,7 +85,7 @@ function spokenWords(transcript: string | null): string | null {
 const isOpen = (incident: Incident) =>
   incident.status === 'emergency' || incident.status === 'precautionary'
 
-// Emily's cloud in her two colours (lavender and rose). Eyes are open and blink now and then (App.css);
+// Emily as a soft clay cloud: pale sky body, coral cheeks. Eyes are open and blink now and then (App.css);
 // when something needs attention her brows lift and the smile goes.
 function EmilyCloud({ mood }: { mood: Mood }) {
   const svgRef = useRef<SVGSVGElement>(null)
@@ -118,44 +118,79 @@ function EmilyCloud({ mood }: { mood: Mood }) {
   }, [])
 
   return (
-    <svg ref={svgRef} className={`emily emily-${mood}`} viewBox="0 0 200 160" role="img" aria-label="Emily">
+    <svg ref={svgRef} className={`emily emily-${mood}`} viewBox="0 0 200 178" role="img" aria-label="Emily">
       <defs>
-        <linearGradient id="emily-base" x1="0" y1="0.1" x2="1" y2="0.9">
-          <stop offset="0" stopColor="#c9bff2" />
-          <stop offset="0.52" stopColor="#efe6f6" />
-          <stop offset="1" stopColor="#f5b3c9" />
-        </linearGradient>
-        <radialGradient id="emily-rose" cx="0.2" cy="0.86" r="0.46">
-          <stop offset="0" stopColor="#f9c3d4" />
-          <stop offset="1" stopColor="#f9c3d4" stopOpacity="0" />
+        {/* Soft matte clay: light from the top left, shade toward the bottom right. */}
+        <radialGradient id="emily-clay" cx="0.32" cy="0.22" r="0.95">
+          <stop offset="0" stopColor="#ffffff" />
+          <stop offset="0.45" stopColor="#edf5fb" />
+          <stop offset="1" stopColor="#bdd5ea" />
         </radialGradient>
-        <radialGradient id="emily-lavender" cx="0.72" cy="0.18" r="0.42">
-          <stop offset="0" stopColor="#ddd5f8" />
-          <stop offset="1" stopColor="#ddd5f8" stopOpacity="0" />
+        <radialGradient id="emily-cheek" cx="0.5" cy="0.5" r="0.5">
+          <stop offset="0" stopColor="#ff9f85" stopOpacity="0.75" />
+          <stop offset="1" stopColor="#ff9f85" stopOpacity="0" />
         </radialGradient>
-        <path
-          id="emily-shape"
-          d="M50 152C22 152 6 126 17 100c6-14 13-22 13-38 0-22 18-35 37-32C76 11 102 3 124 16c9 5 14 12 27 12 22 0 36 18 32 38-2 12 6 22 10 37 7 27-11 49-37 49Z"
-        />
+        <radialGradient id="emily-eye" cx="0.38" cy="0.3" r="0.8">
+          <stop offset="0" stopColor="#35597d" />
+          <stop offset="1" stopColor="#14283d" />
+        </radialGradient>
+        <radialGradient id="emily-ground" cx="0.5" cy="0.5" r="0.5">
+          <stop offset="0" stopColor="#16324a" stopOpacity="0.22" />
+          <stop offset="1" stopColor="#16324a" stopOpacity="0" />
+        </radialGradient>
+        {/* Shading inside the edge plus a fine grain, so the surface reads as a soft
+            solid object instead of a flat sticker. */}
+        <filter id="emily-material" x="-10%" y="-10%" width="120%" height="125%">
+          <feComponentTransfer in="SourceAlpha" result="outside">
+            <feFuncA type="table" tableValues="1 0" />
+          </feComponentTransfer>
+          <feGaussianBlur in="outside" stdDeviation="9" result="outsideSoft" />
+          <feOffset in="outsideSoft" dx="-7" dy="-10" result="shadeShape" />
+          <feFlood floodColor="#5d86ad" floodOpacity="0.5" />
+          <feComposite in2="shadeShape" operator="in" />
+          <feComposite in2="SourceAlpha" operator="in" result="shade" />
+          <feOffset in="outsideSoft" dx="6" dy="8" result="lightShape" />
+          <feFlood floodColor="#ffffff" floodOpacity="0.9" />
+          <feComposite in2="lightShape" operator="in" />
+          <feComposite in2="SourceAlpha" operator="in" result="light" />
+          <feTurbulence type="fractalNoise" baseFrequency="1.1" numOctaves="2" seed="7" result="noise" />
+          <feColorMatrix
+            in="noise"
+            type="matrix"
+            values="0 0 0 0 0.09  0 0 0 0 0.2  0 0 0 0 0.3  0 0 0 0.16 0"
+          />
+          <feComposite in2="SourceAlpha" operator="in" result="grain" />
+          <feMerge>
+            <feMergeNode in="SourceGraphic" />
+            <feMergeNode in="shade" />
+            <feMergeNode in="light" />
+            <feMergeNode in="grain" />
+          </feMerge>
+        </filter>
       </defs>
-      <use href="#emily-shape" fill="url(#emily-base)" />
-      <use href="#emily-shape" fill="url(#emily-rose)" />
-      <use href="#emily-shape" fill="url(#emily-lavender)" />
-      <g className="emily-brows" fill="none" stroke="#4a3f73" strokeOpacity="0.3" strokeWidth="5.5" strokeLinecap="round">
+      <ellipse cx="102" cy="166" rx="74" ry="9" fill="url(#emily-ground)" />
+      <path
+        d="M50 152C22 152 6 126 17 100c6-14 13-22 13-38 0-22 18-35 37-32C76 11 102 3 124 16c9 5 14 12 27 12 22 0 36 18 32 38-2 12 6 22 10 37 7 27-11 49-37 49Z"
+        fill="url(#emily-clay)"
+        filter="url(#emily-material)"
+      />
+      <ellipse cx="52" cy="116" rx="19" ry="13" fill="url(#emily-cheek)" />
+      <ellipse cx="150" cy="116" rx="19" ry="13" fill="url(#emily-cheek)" />
+      <g className="emily-brows" fill="none" stroke="#1d3d5c" strokeOpacity="0.32" strokeWidth="5.5" strokeLinecap="round">
         <path className="emily-brow-left" d="M64 68q9-6 18-3" />
         <path className="emily-brow-right" d="M120 65q9-3 18 3" />
       </g>
       <g className="emily-look">
-        <g className="emily-eyes" fill="#43396b">
-          <ellipse cx="76" cy="96" rx="9.5" ry="12.5" />
-          <ellipse cx="126" cy="96" rx="9.5" ry="12.5" />
+        <g className="emily-eyes" fill="url(#emily-eye)">
+          <ellipse cx="76" cy="96" rx="10" ry="13" />
+          <ellipse cx="126" cy="96" rx="10" ry="13" />
         </g>
-        <g fill="#fff" fillOpacity="0.85" className="emily-glints">
-          <circle cx="79" cy="91" r="3" />
-          <circle cx="129" cy="91" r="3" />
+        <g fill="#fff" fillOpacity="0.92" className="emily-glints">
+          <circle cx="79.5" cy="90.5" r="3.4" />
+          <circle cx="129.5" cy="90.5" r="3.4" />
         </g>
       </g>
-      <path className="emily-smile" d="M92 118q9 7 18 0" fill="none" stroke="#43396b" strokeWidth="4.5" strokeLinecap="round" />
+      <path className="emily-smile" d="M91 117q10 8 20 0" fill="none" stroke="#1d3d5c" strokeWidth="4.5" strokeLinecap="round" />
     </svg>
   )
 }
@@ -634,7 +669,7 @@ function History({
 
 // A short two-note chime when a fall starts waiting for the family. Browsers only allow
 // sound after the person has touched the page, so on a page nobody has touched it stays
-// silent; the rose panel and the Pushover alert carry the news either way.
+// silent; the coral panel and the Pushover alert carry the news either way.
 const TONE_NOTES_HZ = [660, 880]
 const TONE_NOTE_SECONDS = 0.22
 const TONE_VOLUME = 0.18
