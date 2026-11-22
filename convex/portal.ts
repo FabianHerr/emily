@@ -9,6 +9,11 @@ import schema from "./schema";
 const MAX_INCIDENTS = 100;
 // Upper bound when reading a device's family members.
 const MAX_FAMILY_MEMBERS = 50;
+// Pill reminders (CJ-25): a short list the family can read at a glance.
+const MAX_PILLS_PER_DEVICE = 20;
+const MAX_PILL_NAME_CHARS = 40;
+// "HH:MM", 24 h: 00:00 to 23:59.
+const PILL_TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 const decisionLevelValidator = v.union(
   v.literal("none"),
@@ -57,6 +62,10 @@ export const overview = query({
           falseAlarmBy: v.union(v.string(), v.null()),
         }),
       ),
+      // The most recent daily summary (CJ-32, reports.generate), or null.
+      latestReport: v.union(v.null(), v.object({ text: v.string(), createdAt: v.number() })),
+      // Pill reminders (CJ-25), earliest time first.
+      pills: v.array(v.object({ _id: v.id("pills"), name: v.string(), time: v.string() })),
     }),
   ),
   handler: async (ctx, args) => {
@@ -74,6 +83,18 @@ export const overview = query({
       .withIndex("by_deviceId_and_createdAt", (q) => q.eq("deviceId", args.deviceId))
       .order("desc")
       .take(MAX_INCIDENTS);
+    const latestReport = await ctx.db
+      .query("events")
+      .withIndex("by_deviceId_and_type_and_createdAt", (q) =>
+        q.eq("deviceId", args.deviceId).eq("type", "daily_report"),
+      )
+      .order("desc")
+      .first();
+    // The index sorts by time ("HH:MM" sorts as text).
+    const pills = await ctx.db
+      .query("pills")
+      .withIndex("by_deviceId_and_time", (q) => q.eq("deviceId", args.deviceId))
+      .take(MAX_PILLS_PER_DEVICE);
     return {
       personName: device.personName,
       lastHeartbeat: device.lastHeartbeat ?? null,
@@ -95,7 +116,56 @@ export const overview = query({
           falseAlarmBy: i.falseAlarmBy ?? null,
         };
       }),
+      latestReport: latestReport
+        ? { text: latestReport.text, createdAt: latestReport.createdAt }
+        : null,
+      pills: pills.map((p) => ({ _id: p._id, name: p.name, time: p.time })),
     };
+  },
+});
+
+// Adds a pill reminder (CJ-25). The watch says it at that Toronto time every day
+// (convex/crons.ts). error is a short sentence the portal can show as is.
+export const addPill = mutation({
+  args: { deviceId: v.string(), name: v.string(), time: v.string() },
+  returns: v.object({ ok: v.boolean(), error: v.union(v.string(), v.null()) }),
+  handler: async (ctx, args) => {
+    const fail = (error: string) => ({ ok: false, error });
+    const device = await ctx.db
+      .query("devices")
+      .withIndex("by_deviceId", (q) => q.eq("deviceId", args.deviceId))
+      .unique();
+    if (!device) return fail("This watch is not set up.");
+    // One space between words: the name is spoken by the watch.
+    const name = args.name.trim().replace(/\s+/g, " ");
+    const nameChars = Array.from(name).length;
+    if (nameChars < 1 || nameChars > MAX_PILL_NAME_CHARS) {
+      return fail(`The pill name must be 1 to ${MAX_PILL_NAME_CHARS} characters.`);
+    }
+    const time = args.time.trim();
+    if (!PILL_TIME_PATTERN.test(time)) {
+      return fail("The time must be HH:MM in 24-hour time, for example 08:30.");
+    }
+    const existing = await ctx.db
+      .query("pills")
+      .withIndex("by_deviceId_and_time", (q) => q.eq("deviceId", args.deviceId))
+      .take(MAX_PILLS_PER_DEVICE);
+    if (existing.length >= MAX_PILLS_PER_DEVICE) {
+      return fail(`You can have up to ${MAX_PILLS_PER_DEVICE} pill reminders.`);
+    }
+    await ctx.db.insert("pills", { deviceId: args.deviceId, name, time });
+    return { ok: true, error: null };
+  },
+});
+
+// Removes a pill reminder. Already gone: nothing to do.
+export const removePill = mutation({
+  args: { pillId: v.id("pills") },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const pill = await ctx.db.get("pills", args.pillId);
+    if (pill) await ctx.db.delete("pills", pill._id);
+    return null;
   },
 });
 

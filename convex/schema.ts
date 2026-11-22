@@ -8,7 +8,21 @@ export default defineSchema({
     personName: v.string(), // e.g. "Rosa"
     lastHeartbeat: v.optional(v.number()), // ms since epoch
     battery: v.optional(v.number()),
+    // CJ-24: set once "no signal" was logged, so it is logged once per outage.
+    noSignalAlerted: v.optional(v.boolean()),
+    // CJ-24: set once "low battery" was logged; cleared when the battery is back up.
+    lowBatteryAlerted: v.optional(v.boolean()),
   }).index("by_deviceId", ["deviceId"]),
+
+  // Pill reminders (CJ-25). The watch says them through the normal /poll queue.
+  pills: defineTable({
+    deviceId: v.string(),
+    name: v.string(), // e.g. "blood pressure"
+    time: v.string(), // "HH:MM", 24 h, America/Toronto local time
+    lastAnnouncedDay: v.optional(v.string()), // "YYYY-MM-DD" in Toronto time
+  })
+    .index("by_deviceId_and_time", ["deviceId", "time"])
+    .index("by_time", ["time"]),
 
   familyMembers: defineTable({
     name: v.string(),
@@ -68,9 +82,17 @@ export default defineSchema({
       v.literal("acknowledged"),
       v.literal("watch_said"),
       v.literal("incident_closed"),
+      v.literal("daily_report"), // CJ-32
+      v.literal("pill_reminder"), // CJ-25
+      v.literal("watch_offline"), // CJ-24
+      v.literal("watch_online"), // CJ-24
+      v.literal("low_battery"), // CJ-24
     ),
     text: v.string(), // English, e.g. "Fall detected (impact 3.4 g)"
     level: v.union(v.literal("info"), v.literal("precautionary"), v.literal("emergency")),
     createdAt: v.number(), // ms since epoch
-  }).index("by_deviceId_and_createdAt", ["deviceId", "createdAt"]),
+  })
+    .index("by_deviceId_and_createdAt", ["deviceId", "createdAt"])
+    // The portal's latest daily summary, without scanning the whole feed.
+    .index("by_deviceId_and_type_and_createdAt", ["deviceId", "type", "createdAt"]),
 });

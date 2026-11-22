@@ -9,6 +9,7 @@
  */
 
 import type * as ai from "../ai.js";
+import type * as crons from "../crons.js";
 import type * as decide from "../decide.js";
 import type * as elevenlabs from "../elevenlabs.js";
 import type * as events from "../events.js";
@@ -17,8 +18,11 @@ import type * as http from "../http.js";
 import type * as incidents from "../incidents.js";
 import type * as notify from "../notify.js";
 import type * as portal from "../portal.js";
+import type * as reports from "../reports.js";
 import type * as seed from "../seed.js";
+import type * as signal from "../signal.js";
 import type * as talk from "../talk.js";
+import type * as time from "../time.js";
 
 import type {
   ApiFromModules,
@@ -28,6 +32,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   ai: typeof ai;
+  crons: typeof crons;
   decide: typeof decide;
   elevenlabs: typeof elevenlabs;
   events: typeof events;
@@ -36,8 +41,11 @@ declare const fullApi: ApiFromModules<{
   incidents: typeof incidents;
   notify: typeof notify;
   portal: typeof portal;
+  reports: typeof reports;
   seed: typeof seed;
+  signal: typeof signal;
   talk: typeof talk;
+  time: typeof time;
 }>;
 
 /**

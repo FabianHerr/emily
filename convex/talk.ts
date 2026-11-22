@@ -7,14 +7,16 @@ import { internalAction, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { logEvent } from "./events";
+import { recordHeartbeat } from "./signal";
 
 // Scheduled (never awaited) by the AI Service and by /ack, so the family alert never
 // waits for the audio. If the voice fails or times out, the message is queued with
-// text only and the watch shows it on screen.
+// text only and the watch shows it on screen. No incidentId for messages that are not
+// about a fall (pill reminders).
 export const say = internalAction({
   args: {
     deviceId: v.string(),
-    incidentId: v.id("incidents"),
+    incidentId: v.optional(v.id("incidents")),
     text: v.string(),
     askAgain: v.boolean(),
   },
@@ -37,7 +39,7 @@ export const say = internalAction({
     }
     await ctx.runMutation(internal.talk.queueMessage, {
       deviceId: args.deviceId,
-      incidentId: args.incidentId,
+      ...(args.incidentId !== undefined && { incidentId: args.incidentId }),
       text: args.text,
       askAgain: args.askAgain,
       ...(audioId !== null && { audioId }),
@@ -50,7 +52,7 @@ export const say = internalAction({
 export const queueMessage = internalMutation({
   args: {
     deviceId: v.string(),
-    incidentId: v.id("incidents"),
+    incidentId: v.optional(v.id("incidents")),
     text: v.string(),
     askAgain: v.boolean(),
     audioId: v.optional(v.id("_storage")),
@@ -86,7 +88,8 @@ export const poll = internalMutation({
       .withIndex("by_deviceId", (q) => q.eq("deviceId", args.deviceId))
       .unique();
     if (!device) return { known: false as const };
-    await ctx.db.patch("devices", device._id, { lastHeartbeat: Date.now() });
+    // Same as POST /heartbeat without a battery: also clears a "no signal" flag.
+    await recordHeartbeat(ctx, device, undefined);
 
     // Oldest first: within one index value, rows come back in creation order.
     const next = await ctx.db

@@ -142,7 +142,7 @@ AI Service llama a Notify Family y a Talk to Loved One **en paralelo**: el aviso
 | `POST /fall` | Reloj | Datos en la URL + WAV crudo en el cuerpo (puede ir vacío) | `{ "incidentId": "abc" }` (detalle abajo) |
 | `GET /poll` | Reloj | `?device=watch-1` | `{ "audioUrl": "...", "text": "...", "askAgain": false }` o `{}` (detalle abajo) |
 | `GET /audio/<id>` | Reloj | — | El WAV de la respuesta (la URL completa viene en `/poll`) |
-| `POST /heartbeat` | Reloj | `{ "battery": 72 }` | OK |
+| `POST /heartbeat` | Reloj | `?device=watch-1` + `{ "battery": 72 }` | `{ "ok": true }` (detalle abajo) |
 | `POST /ack` | Pushover | Recibo confirmado | OK |
 
 **Contrato exacto de POST /fall (implementado en CJ-6):**
@@ -167,6 +167,12 @@ AI Service llama a Notify Family y a Talk to Loved One **en paralelo**: el aviso
   - Cada `/poll` cuenta como latido (`devices.lastHeartbeat`).
 - `GET <audioUrl>` (no armar la URL a mano): `200` con `Content-Type: audio/wav` y `Content-Length`; WAV 16 kHz, mono, 16 bits. `404` → `{ "error": "Unknown audio" }`.
 - El audio tarda ~1 s en estar listo después de la decisión; el aviso a la familia no lo espera.
+
+**Contrato exacto de POST /heartbeat (CJ-24, backend, 21 nov):**
+- `POST /heartbeat?device=watch-1` con cuerpo JSON `{ "battery": 72 }`. `battery` es opcional (número de 0 a 100). Si falta, está fuera de rango o el cuerpo no es JSON, se ignora y el latido igual cuenta.
+- Respuestas (JSON): `200` → `{ "ok": true }` · `400` → `{ "error": "'device' is required" }` · `404` → `{ "error": "Unknown device" }`.
+- Guarda `devices.lastHeartbeat` (y `battery`). `GET /poll` también cuenta como latido: `/heartbeat` hace falta sobre todo para mandar la batería.
+- Más de 3 min sin latido → evento "sin señal" (sección 12).
 
 ## 7. Flujo de una caída: dos rondas, sin apresurarse
 
@@ -322,8 +328,12 @@ No usar SisFall ni KFall: son de cintura.
 - Revisar siempre `stop_reason`: si es `"refusal"` no hay JSON; tratarlo como fallo y pasar al respaldo.
 - Respaldo: Gemini `gemini-3.5-flash-lite`. Clave en Convex: `GEMINI_API_KEY`. **Implementado y probado en CJ-19 (21 nov), con `fetch`, sin dependencia nueva:** `POST https://generativelanguage.googleapis.com/v1beta/interactions`, cabeceras `x-goog-api-key` y `Api-Revision: 2026-05-20`, cuerpo `{ model, system_instruction, input, response_format: { type: "text", mime_type: "application/json", schema }, generation_config: { thinking_level: "minimal", max_output_tokens: 2048 }, store: false }`. La respuesta trae `status: "completed"` y el texto en `steps[]` de tipo `model_output` → `content[].text`. Probar solo: `npx convex run ai:decideWithGemini '{...}'`. Sin confirmar: los límites del nivel gratuito.
 - Orden de la decisión (`convex/ai.ts`, `convex/fallback.ts`): Claude; a los 2.5 s (o antes si Claude falla) arranca Gemini en paralelo y gana el primero; a los 5 s deciden las reglas de palabras clave (`fallbackDecision` en `convex/decide.ts`). El incidente guarda quién decidió en `decision.source`: `claude`, `gemini`, `rules` o `silence`.
-- Registro de actividad para el portal (CJ-28, `convex/events.ts`): tabla `events` (`deviceId`, `incidentId?`, `type`, `text` en inglés listo para mostrar, `level` info/precautionary/emergency, `createdAt`). Se escribe solo con `logEvent`, que nunca lanza errores. Tipos: `fall_detected`, `person_said`, `no_answer`, `alert_sent`, `acknowledged`, `watch_said`, `incident_closed`. El portal lee con la query pública `api.events.list({ deviceId, limit })`, más recientes primero (50 por defecto, máximo 200).
+- Registro de actividad para el portal (CJ-28, `convex/events.ts`): tabla `events` (`deviceId`, `incidentId?`, `type`, `text` en inglés listo para mostrar, `level` info/precautionary/emergency, `createdAt`). Se escribe solo con `logEvent`, que nunca lanza errores. Tipos: `fall_detected`, `person_said`, `no_answer`, `alert_sent`, `acknowledged`, `watch_said`, `incident_closed`, y desde el 21 nov `daily_report`, `pill_reminder`, `watch_offline`, `watch_online`, `low_battery` (sin `incidentId`). El portal lee con la query pública `api.events.list({ deviceId, limit })`, más recientes primero (50 por defecto, máximo 200).
 - Portal de la familia (CJ-20, `src/App.tsx`): una página, `npm run dev`. Lee `api.portal.overview({ deviceId })` (estado del reloj, nombres de la familia y las últimas 20 caídas) y confirma con `api.portal.onMyWay({ incidentId, name })`, que usa la misma función que `/ack` (`acknowledgeIncident`). El portal también puede marcar una caída como falsa alarma con `api.portal.markFalseAlarm({ incidentId, name })`: cierra el incidente (`falseAlarmBy`), cancela los avisos de Pushover y encola para el reloj "It was a false alarm. Everything is OK.". Cada caída se abre para ver el paso a paso, que sale de `api.events.list`. Sin login. Colores de Emily: solo verde pastel y rosa pastel (decisión de Fabian); la nube del logo está dibujada en SVG dentro de `App.tsx` y en `public/favicon.svg`.
+- Resumen diario (CJ-32, `convex/reports.ts`): `api.reports.generate({ deviceId })` → `{ ok, text }`. Lee los eventos de las últimas 24 h. Sin caídas no llama a la IA: "No falls today. Rosa's watch was online.". Con caídas, Claude (mismo modelo que `ai.ts`, 10 s máx.) escribe 2–3 frases. Se guarda como evento `daily_report` y el portal lo lee en `overview.latestReport`. Si Claude falla: `ok: false`, "Could not write the summary. Try again." y no se guarda nada.
+- Pastillas (CJ-25, opción A): tabla `pills` (`name`, `time` "HH:MM" hora de Toronto). `api.portal.addPill({ deviceId, name, time })` → `{ ok, error }` (máx. 20 por reloj, nombre de 1 a 40 letras), `api.portal.removePill({ pillId })` y `overview.pills`. Un cron cada minuto (`convex/crons.ts`) encola "Rosa, it's time for your blood pressure pill." y el reloj lo recibe por `/poll` como cualquier mensaje: el reloj no cambia. Una vez al día por pastilla; si el cron llega tarde, la toma el minuto siguiente.
+- Sin señal (CJ-24, `convex/signal.ts`): el mismo cron registra `watch_offline` ("Rosa's watch has not responded since 2:14 PM") una vez cuando pasan más de 3 min sin latido; el siguiente latido o `/poll` registra `watch_online`. Batería < 15 % → un `low_battery`, que no se repite hasta pasar de 20 %. Un reloj que nunca mandó latido se ignora.
+- **El Pushover de sin señal está apagado:** `SIGNAL_ALERTS_ENABLED = false` en `convex/notify.ts`, hasta que el equipo decida (mandaría un aviso cada vez que se apaga el reloj). Apagado, solo se registran los eventos. Encendido: prioridad 1 "Protection off: ..." y prioridad 0 para "back online" y batería baja (nunca probado contra Pushover).
 - Última defensa (`incidents.lastDefence`): 60 s después de crear un incidente, si sigue en `asking` sin decisión, o la ronda 2 nunca llegó, sale una emergencia "Rosa fell and is not responding." No se cancela: se revisa sola y no hace nada en el caso normal (sección 8).
 - Voz de Emily: la elige Fabian en ElevenLabs y guarda su id en `ELEVENLABS_VOICE_ID`.
 

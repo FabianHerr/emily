@@ -179,6 +179,35 @@ const poll = httpAction(async (ctx, req) => {
   });
 });
 
+// The heartbeat body is tiny ({ "battery": 72 }); ignore anything bigger.
+const MAX_HEARTBEAT_BODY_CHARS = 1024;
+
+// POST /heartbeat?device=watch-1 with body { "battery": 72 } (CJ-24). The battery is
+// optional: a missing or bad body is ignored and the heartbeat still counts.
+// 200 { ok: true }. 400 without device. 404 unknown device.
+const heartbeat = httpAction(async (ctx, req) => {
+  const deviceId = (new URL(req.url).searchParams.get("device") ?? "").trim();
+  if (!deviceId) return json(400, { error: "'device' is required" });
+  const text = await req.text().catch(() => "");
+  let battery: number | undefined;
+  if (text.length <= MAX_HEARTBEAT_BODY_CHARS) {
+    try {
+      const body: unknown = JSON.parse(text);
+      const value =
+        typeof body === "object" && body !== null
+          ? (body as Record<string, unknown>).battery
+          : undefined;
+      // The 0-100 range is checked in signal.heartbeat.
+      if (typeof value === "number") battery = value;
+    } catch {
+      // Not JSON or empty: same as no battery.
+    }
+  }
+  const result = await ctx.runMutation(internal.signal.heartbeat, { deviceId, battery });
+  if (!result.known) return json(404, { error: "Unknown device" });
+  return json(200, { ok: true });
+});
+
 // GET /audio/<id>: the WAV for a message (the full URL comes from /poll). 404 if unknown.
 const AUDIO_PATH_PREFIX = "/audio/";
 const audio = httpAction(async (ctx, req) => {
@@ -206,4 +235,5 @@ http.route({ path: "/poll", method: "GET", handler: poll });
 http.route({ pathPrefix: AUDIO_PATH_PREFIX, method: "GET", handler: audio });
 http.route({ path: "/fall", method: "POST", handler: fall });
 http.route({ path: "/ack", method: "POST", handler: ack });
+http.route({ path: "/heartbeat", method: "POST", handler: heartbeat });
 export default http;

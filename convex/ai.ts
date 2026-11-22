@@ -26,10 +26,11 @@ import { withFallback } from "./fallback";
 const AI_BACKUP_AFTER_MS = 2500;
 const AI_GIVE_UP_MS = 5000;
 
-// Claude (HANDOFF.md section 12, "Modelo de IA").
-const CLAUDE_MODEL = "claude-sonnet-5-5";
+// Claude (HANDOFF.md section 12, "Modelo de IA"). Also used by the daily summary
+// (convex/reports.ts), so both stay on the same model and settings.
+export const CLAUDE_MODEL = "claude-sonnet-5-5";
 // This model thinks by default; "low" keeps thinking short or skips it. Target 2.5 s.
-const CLAUDE_EFFORT = "low" as const;
+export const CLAUDE_EFFORT = "low" as const;
 // null = the model's default (adaptive thinking). The alternative to measure is
 // { type: "between_tools" }, which turns thinking off on this model.
 const CLAUDE_THINKING = null as { type: "between_tools" } | null;
@@ -41,8 +42,8 @@ const CLAUDE_TIMEOUT_MS = 5000;
 const CLAUDE_MAX_TOKENS = 4096;
 // Server-side refusal fallback, on by default for this model (claude-api reference,
 // "Migrating to Claude Sonnet 5.5" -> "Safeguards and fallback").
-const USE_REFUSAL_FALLBACK: boolean = true;
-const REFUSAL_FALLBACK_BETA = "server-side-fallback-2026-07-01";
+export const USE_REFUSAL_FALLBACK: boolean = true;
+export const REFUSAL_FALLBACK_BETA = "server-side-fallback-2026-07-01";
 
 // Gemini backup, Interactions API (verified 21 Nov against
 // https://ai.google.dev/gemini-api/docs/structured-output and the create-interaction

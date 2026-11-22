@@ -7,6 +7,10 @@ import { env, internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { joinNames } from "./events";
 
+// Off until the team decides: one Pushover each time the watch is switched off.
+// While false, sendSignalAlert sends nothing; the events are still logged (CJ-24).
+const SIGNAL_ALERTS_ENABLED: boolean = false;
+
 const PUSHOVER_MESSAGES_URL = "https://api.pushover.net/1/messages.json";
 const PUSHOVER_RECEIPTS_URL = "https://api.pushover.net/1/receipts";
 // Each Pushover request gives up after this, so one slow request never blocks the rest.
@@ -19,6 +23,9 @@ const RETRY_DELAY_MS = 5000;
 // Priorities (HANDOFF.md section 9).
 const PRECAUTIONARY_PRIORITY = 1; // sounds once
 const EMERGENCY_PRIORITY = 2; // repeats until someone acknowledges
+// Watch signal (CJ-24): no signal sounds once; back online and low battery are quiet.
+const NO_SIGNAL_PRIORITY = 1;
+const SIGNAL_INFO_PRIORITY = 0;
 // Pushover requires retry >= 30 and expire <= 10800 (seconds).
 const EMERGENCY_RETRY_SECONDS = 30;
 const EMERGENCY_EXPIRE_SECONDS = 3600;
@@ -208,6 +215,53 @@ export const sendAlert = internalAction({
       }
     }
     return { sent, failed: results.length - sent };
+  },
+});
+
+// Watch signal alerts (CJ-24), scheduled by convex/signal.ts. Plain notifications: no
+// receipt, no title, one try per family member (the next state change sends again).
+export const sendSignalAlert = internalAction({
+  args: {
+    deviceId: v.string(),
+    kind: v.union(v.literal("offline"), v.literal("online"), v.literal("low_battery")),
+    text: v.string(),
+  },
+  returns: v.object({ sent: v.number(), failed: v.number() }),
+  // Explicit types: convex/signal.ts and this file reference each other.
+  handler: async (ctx, args): Promise<{ sent: number; failed: number }> => {
+    if (!SIGNAL_ALERTS_ENABLED) {
+      console.log(`sendSignalAlert: off (SIGNAL_ALERTS_ENABLED), not sent: ${args.kind}`);
+      return { sent: 0, failed: 0 };
+    }
+    const token = process.env.PUSHOVER_APP_TOKEN;
+    if (!token) {
+      console.error("sendSignalAlert: PUSHOVER_APP_TOKEN is not set");
+      return { sent: 0, failed: 0 };
+    }
+    const members: { name: string; pushoverUserKey: string }[] = await ctx.runQuery(
+      internal.signal.getSignalTargets,
+      { deviceId: args.deviceId },
+    );
+    if (members.length === 0) {
+      console.error(`sendSignalAlert: no family members for device ${args.deviceId}`);
+      return { sent: 0, failed: 0 };
+    }
+    const offline = args.kind === "offline";
+    const message = truncate(offline ? `Protection off: ${args.text}` : args.text, MAX_MESSAGE_CHARS);
+    const priority = String(offline ? NO_SIGNAL_PRIORITY : SIGNAL_INFO_PRIORITY);
+    const results = await Promise.allSettled(
+      members.map((m) =>
+        postToPushover(PUSHOVER_MESSAGES_URL, { token, user: m.pushoverUserKey, message, priority }),
+      ),
+    );
+    let failed = 0;
+    results.forEach((result, i) => {
+      if (result.status === "rejected") {
+        failed++;
+        console.error(`sendSignalAlert: ${args.kind} to ${members[i].name} failed: ${String(result.reason)}`);
+      }
+    });
+    return { sent: results.length - failed, failed };
   },
 });
 
