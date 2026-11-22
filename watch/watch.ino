@@ -14,13 +14,26 @@
 #include <math.h>
 #include "secrets.h"
 #include "are_you_ok.h"  // round 1 question as a WAV array (made with watch/tools/wav2h.js)
+#include "fall_model.h"         // CJ-22: Random Forest from ml/watch_model (emlearn)
+#include "fall_threshold.h"
+#include "model_test_cases.h"   // ml/watch_model/test_cases.csv, for the self-test
 
 // ---- Tunable constants ----
 const uint32_t SERIAL_BAUD = 115200;
 const uint32_t SAMPLE_PERIOD_MS = 20;    // 50 Hz
 const float STANDARD_GRAVITY = 9.80665f; // m/s² per g
-const size_t HISTORY_SAMPLES = 150;      // 3 s at 50 Hz
+const size_t HISTORY_SAMPLES = 400;      // 8 s at 50 Hz (the model needs 1 s before to 3 s after
+                                         // the impact, read 6 s after the trigger)
 const bool PRINT_RAW_SAMPLES = false;   // true = print every sample (CJ-4 test / Serial Plotter)
+
+// The Random Forest as judge (CJ-22). The thresholds below are the gate; the model decides.
+#define USE_MODEL 1                           // 0 = thresholds only (CJ-5), if the model misbehaves in the demo
+const bool RUN_MODEL_SELF_TEST = true;        // at boot: test_cases.csv through the model, print the error
+const bool DUMP_MODEL_WINDOW = true;          // print the 200 samples the model saw (to compare with features.py)
+const float AXIS_LIMIT_G = 8.0f;              // clamp each axis like ml/features.py
+const int MODEL_BEFORE_SAMPLES = 50;          // 1 s before the impact
+const int MODEL_AFTER_SAMPLES = 150;          // 3 s after it
+const int ORIENTATION_SAMPLES = 25;           // half a second
 
 // Fall detection (CJ-5). Starting values from the literature; tune by testing.
 const float TRIGGER_G = 2.0f;                 // 1. a sample above this starts the check
@@ -52,7 +65,7 @@ const uint32_t SCREEN_WIFI_REFRESH_MS = 1000;
 // Asking "Are you OK?" and recording the answer (CJ-10).
 const uint8_t SPEAKER_VOLUME = 100;
 const uint32_t AFTER_QUESTION_MS = 300;       // so we do not record our own speaker
-const size_t RECORD_SECONDS = 5;
+const size_t RECORD_SECONDS = 3;               // was 5 (CJ-10); 3 s uploads ~1 s faster (Sebastian, 22 nov)
 const uint16_t RECORD_SAMPLE_RATE = 16000;
 const uint8_t RECORD_CHANNELS = 1;            // mono
 const float MIC_GAIN_DB = 12.0f;              // software gain with soft clipping; library default is 0 on core 3.x.
@@ -99,7 +112,14 @@ struct FallEvent {
   bool positionChanged;
   bool freeFall;
   uint32_t atMs;
+  float confidence;  // model score (CJ-22), sent as &confidence=
+  uint32_t fallNumber;  // set by onFall; with bootId makes &fallId= (same for both rounds)
 };
+
+// fallId = "<bootId>-<fallNumber>": unique per fall, the same for its retries and its round 2,
+// so Convex can tell a retry from a new fall (instead of a 60 s window).
+uint32_t bootId = 0;
+uint32_t fallCounter = 0;
 
 // Ring buffer: history[historyHead] is the next slot to write.
 AccelSample history[HISTORY_SAMPLES];
@@ -112,6 +132,7 @@ enum class DetectorState { Idle, Watching };
 DetectorState detectorState = DetectorState::Idle;
 uint32_t triggerMs = 0;
 float impactMaxG = 0;
+uint32_t impactMs = 0;    // time of the strongest sample (the model's centre)
 bool freeFall = false;
 float gravityBefore[3] = {0, 0, 0};
 float gravityAfterSum[3] = {0, 0, 0};
@@ -156,6 +177,7 @@ volatile bool round1Ended = false;      // send task: round 1 upload finished (o
 volatile uint32_t round1EndedMs = 0;
 volatile bool round2Ended = false;
 volatile bool replyIncoming = false;    // send task took a message and is downloading its voice
+volatile bool inConversation = false;   // ASKING/WAITING: only messages of the current fall count
 uint32_t lastAlarmBuzzMs = 0;
 
 // The question and the recording block for ~8 s, so they run from loop(), not from a UI callback.
@@ -185,6 +207,7 @@ const char *flowName(Flow f) {
 void setFlow(Flow f) {
   flow = f;
   flowSinceMs = millis();
+  inConversation = f == Flow::Asking1 || f == Flow::Waiting1 || f == Flow::Asking2 || f == Flow::Waiting2;
   if (f == Flow::FollowUp) fastPollUntilMs = millis() + FOLLOW_UP_MS;  // poll every 3 s all along
   if (stateLabel) lv_label_set_text(stateLabel, flowName(f));
   Serial.printf("FLOW %s\n", flowName(f));
@@ -244,8 +267,10 @@ void onFall(const FallEvent &f) {
   showFall(f);
   Serial.printf("FALL impact_max_g=%.2f seconds_still=%d position_changed=%d free_fall=%d\n",
                 f.impactMaxG, f.secondsStill, f.positionChanged, f.freeFall);
-  // Round 1: fall -> vibrate -> "Are you OK?" -> record 5 s -> POST /fall with the audio.
+  // Round 1: fall -> vibrate -> "Are you OK?" -> record -> POST /fall with the audio.
+  // A new fall replaces the previous conversation completely (decided with Sebastian, 22 nov).
   fallToSend = f;
+  fallToSend.fallNumber = ++fallCounter;
   replySeen = false;
   replyIncoming = false;
   askRound = 1;
@@ -362,9 +387,10 @@ int postFall(const FallEvent &f, int round, uint8_t *audio, size_t len, uint32_t
   String url = String(CONVEX_SITE_URL) + "/fall?device=" + DEVICE_ID + "&round=" + String(round) +
                "&impact=" + String(f.impactMaxG, 2) + "&still=" + String(f.secondsStill) +
                "&position=" + (f.positionChanged ? "1" : "0") +
-               "&confidence=" + String(MODEL_CONFIDENCE, 2);
+               "&confidence=" + String(f.confidence, 2);
   // Round 2 joins round 1's incident. If round 1 never arrived, Convex creates the incident.
   if (round == 2 && incidentId.length() > 0) url += "&incidentId=" + incidentId;
+  url += "&fallId=" + String(bootId, HEX) + "-" + String(f.fallNumber);
 
   WiFiClientSecure client;
   client.setInsecure();  // demo only (HANDOFF section 10)
@@ -502,6 +528,16 @@ int pollOnce(bool deliver) {
   Serial.printf("POLL text=\"%s\" askAgain=%d audio=%d%s\n", text.c_str(), askAgain, hasAudio,
                 deliver ? "" : " (old message, dropped)");
   if (!deliver) return 1;
+
+  // During a conversation, a message about another (older) fall is not said: the newest fall
+  // replaces the old conversation. Needs incidentId in /poll (Convex, Fabian); a message
+  // without it is still delivered, as before. incidentId is only touched by this task.
+  String msgIncident;
+  if (inConversation && jsonString(body, "incidentId", msgIncident) && msgIncident != incidentId) {
+    Serial.printf("POLL dropped: message for incident %s, current is %s\n", msgIncident.c_str(),
+                  incidentId.length() ? incidentId.c_str() : "(not sent yet)");
+    return 1;  // poll again right away
+  }
   replyIncoming = true;  // stops the round-2 timer while the voice downloads
 
   uint8_t *wav = nullptr;
@@ -745,10 +781,116 @@ void connectWifi() {
   }
 }
 
+// ---- CJ-22: the 9 features of ml/features.py (extract_features), same order and windows ----
+
+float clampAxis(float v) { return v > AXIS_LIMIT_G ? AXIS_LIMIT_G : (v < -AXIS_LIMIT_G ? -AXIS_LIMIT_G : v); }
+
+// Builds the features around the strongest sample (impactMs) and runs the model.
+// Returns false if the buffer does not hold 1 s before to 3 s after the impact.
+bool modelScore(float *scoreOut) {
+  // a = age of the impact sample (historyAt(a)); sample k rows after it is historyAt(a - k).
+  int a = -1;
+  for (size_t i = 0; i < historyCount; i++) {
+    if (historyAt(i).tMs == impactMs) { a = (int)i; break; }
+  }
+  if (a < MODEL_AFTER_SAMPLES - 1 || a + MODEL_BEFORE_SAMPLES >= (int)historyCount) {
+    Serial.printf("MODEL window incomplete (impact age %d, buffer %u)\n", a, (unsigned)historyCount);
+    return false;
+  }
+  uint32_t t0 = micros();
+  auto axes = [&](int k, float v[3]) {
+    const AccelSample &s = historyAt(a - k);
+    v[0] = clampAxis(s.x); v[1] = clampAxis(s.y); v[2] = clampAxis(s.z);
+  };
+  auto mag = [](const float v[3]) { return sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); };
+
+  // "around": 1 s before to 1 s after (k = -50..49). Python: force.max/min/mean/var (divide by N).
+  float v[3], mx = -1e9f, mn = 1e9f;
+  double sum = 0, sumSq = 0;
+  float firstDir[3] = {0, 0, 0}, lastDir[3] = {0, 0, 0};
+  const int aroundN = 2 * MODEL_BEFORE_SAMPLES;
+  for (int k = -MODEL_BEFORE_SAMPLES; k < MODEL_BEFORE_SAMPLES; k++) {
+    axes(k, v);
+    float m = mag(v);
+    if (m > mx) mx = m;
+    if (m < mn) mn = m;
+    sum += m;
+    sumSq += (double)m * m;
+    int idx = k + MODEL_BEFORE_SAMPLES;
+    for (int j = 0; j < 3; j++) {
+      if (idx < ORIENTATION_SAMPLES) firstDir[j] += v[j] / ORIENTATION_SAMPLES;    // around[:25]
+      if (idx >= aroundN - ORIENTATION_SAMPLES) lastDir[j] += v[j] / ORIENTATION_SAMPLES;  // around[-25:]
+    }
+  }
+  double mean = sum / aroundN;
+
+  // "after": 1 s to 3 s after (k = 50..149). std (N), mean |force - 1|, max; direction of the last 1 s.
+  double aSum = 0, aSumSq = 0, offSum = 0;
+  float aMax = -1e9f, afterDir[3] = {0, 0, 0};
+  const int afterN = MODEL_AFTER_SAMPLES - MODEL_BEFORE_SAMPLES;
+  for (int k = MODEL_BEFORE_SAMPLES; k < MODEL_AFTER_SAMPLES; k++) {
+    axes(k, v);
+    float m = mag(v);
+    aSum += m;
+    aSumSq += (double)m * m;
+    offSum += fabsf(m - 1.0f);
+    if (m > aMax) aMax = m;
+    if (k >= MODEL_AFTER_SAMPLES - 2 * ORIENTATION_SAMPLES) {
+      for (int j = 0; j < 3; j++) afterDir[j] += v[j] / (2 * ORIENTATION_SAMPLES);
+    }
+  }
+  double aMean = aSum / afterN;
+
+  // before_direction = rows -50..-26 = around[:25] (firstDir).
+  float features[FALL_FEATURES] = {
+      mx,
+      mn,
+      (float)mean,
+      (float)(sumSq / aroundN - mean * mean),
+      angleBetweenDeg(firstDir, lastDir),
+      (float)sqrt(fmax(0.0, aSumSq / afterN - aMean * aMean)),
+      (float)(offSum / afterN),
+      aMax,
+      angleBetweenDeg(firstDir, afterDir),
+  };
+  float out[2] = {0, 0};
+  fall_model_predict_proba(features, FALL_FEATURES, out, 2);
+  uint32_t us = micros() - t0;
+  *scoreOut = out[1];
+  Serial.printf("MODEL features=%.4f,%.4f,%.4f,%.4f,%.2f,%.4f,%.4f,%.4f,%.2f score=%.3f threshold=%.3f in %lu us\n",
+                features[0], features[1], features[2], features[3], features[4], features[5], features[6],
+                features[7], features[8], out[1], FALL_SCORE_THRESHOLD, (unsigned long)us);
+  if (DUMP_MODEL_WINDOW) {
+    // Same 200 rows (clamped x,y,z in g), for ml/features.py: impact is row 50.
+    Serial.println("WINDOW begin x,y,z (impact at row 50)");
+    for (int k = -MODEL_BEFORE_SAMPLES; k < MODEL_AFTER_SAMPLES; k++) {
+      axes(k, v);
+      Serial.printf("W %.4f,%.4f,%.4f\n", v[0], v[1], v[2]);
+    }
+    Serial.println("WINDOW end");
+  }
+  return true;
+}
+
+// ml/watch_model/test_cases.csv through the model: the score must match Python (2 decimals).
+void runModelSelfTest() {
+  float worst = 0;
+  for (int i = 0; i < MODEL_TEST_CASE_COUNT; i++) {
+    float out[2] = {0, 0};
+    fall_model_predict_proba(MODEL_TEST_CASES[i], FALL_FEATURES, out, 2);
+    float diff = fabsf(out[1] - MODEL_TEST_CASES[i][FALL_FEATURES]);
+    if (diff > worst) worst = diff;
+    Serial.printf("SELFTEST %d watch=%.4f python=%.4f\n", i, out[1], MODEL_TEST_CASES[i][FALL_FEATURES]);
+  }
+  Serial.printf("SELFTEST %d cases, worst difference %.4f -> %s\n", MODEL_TEST_CASE_COUNT, worst,
+                worst < 0.005f ? "OK" : "MISMATCH");
+}
+
 void startWatching(const AccelSample &trigger) {
   detectorState = DetectorState::Watching;
   triggerMs = trigger.tMs;
   impactMaxG = trigger.mag;
+  impactMs = trigger.tMs;
   freeFall = false;
   gravityAfterSum[0] = gravityAfterSum[1] = gravityAfterSum[2] = 0;
   gravityAfterCount = 0;
@@ -782,27 +924,43 @@ void finishWatching() {
   float angle = angleBetweenDeg(gravityBefore, gravityAfter);
   bool positionChanged = angle > POSITION_CHANGE_DEG;
 
-  bool isFall = impactMaxG > TRIGGER_G &&
-                (secondsStill >= MIN_STILL_SECONDS || positionChanged ||
-                 (freeFall && secondsStill >= MIN_STILL_SECONDS_WITH_FREE_FALL));
+  bool thresholdFall = impactMaxG > TRIGGER_G &&
+                       (secondsStill >= MIN_STILL_SECONDS || positionChanged ||
+                        (freeFall && secondsStill >= MIN_STILL_SECONDS_WITH_FREE_FALL));
+  bool isFall = thresholdFall;
+  float confidence = MODEL_CONFIDENCE;
+#if USE_MODEL
+  // Score only (no "always ask above 3 g" rule: it would ask on 62 % of strong normal moves).
+  // If the window is not complete, fall back to the thresholds.
+  float score;
+  if (modelScore(&score)) {
+    isFall = score > FALL_SCORE_THRESHOLD;
+    confidence = score;
+  }
+#endif
 
-  Serial.printf("CHECK impact_max_g=%.2f seconds_still=%d angle=%.0f free_fall=%d -> %s\n",
-                impactMaxG, secondsStill, angle, freeFall, isFall ? "FALL" : "no fall");
+  Serial.printf("CHECK impact_max_g=%.2f seconds_still=%d angle=%.0f free_fall=%d thresholds=%d -> %s\n",
+                impactMaxG, secondsStill, angle, freeFall, thresholdFall, isFall ? "FALL" : "no fall");
 
   if (isFall) {
-    onFall({impactMaxG, secondsStill, positionChanged, freeFall, triggerMs});
+    onFall({impactMaxG, secondsStill, positionChanged, freeFall, triggerMs, confidence});
   }
 }
 
 void updateDetector(const AccelSample &s) {
   if (detectorState == DetectorState::Idle) {
-    // Only a new conversation can start a new fall (CJ-17: detect again once back to IDLE).
-    if (flow == Flow::Idle && s.mag > TRIGGER_G && (int32_t)(s.tMs - cooldownUntilMs) >= 0) startWatching(s);
+    // A second fall must not be missed: detect in IDLE and also in FOLLOW_UP (decided with
+    // Sebastian, 22 nov). Not while asking/waiting: the mic is busy and it would break the rounds.
+    bool canDetect = flow == Flow::Idle || flow == Flow::FollowUp;
+    if (canDetect && s.mag > TRIGGER_G && (int32_t)(s.tMs - cooldownUntilMs) >= 0) startWatching(s);
     return;
   }
 
   uint32_t since = s.tMs - triggerMs;
-  if (since <= IMPACT_WINDOW_MS && s.mag > impactMaxG) impactMaxG = s.mag;
+  if (since <= IMPACT_WINDOW_MS && s.mag > impactMaxG) {
+    impactMaxG = s.mag;
+    impactMs = s.tMs;
+  }
 
   if (since >= GRAVITY_AFTER_FROM_MS && since < GRAVITY_AFTER_TO_MS) {
     gravityAfterSum[0] += s.x; gravityAfterSum[1] += s.y; gravityAfterSum[2] += s.z;
@@ -827,7 +985,7 @@ void onSimulateFall(lv_event_t *e) {
   }
   Serial.println("SIMULATE fall button");
   detectorState = DetectorState::Idle;
-  onFall({SIMULATED_IMPACT_G, (int)(STILL_WATCH_MS / 1000), true, false, millis()});
+  onFall({SIMULATED_IMPACT_G, (int)(STILL_WATCH_MS / 1000), true, false, millis(), MODEL_CONFIDENCE});
 }
 
 void setupScreen() {
@@ -867,6 +1025,7 @@ void setupScreen() {
 
 void setup() {
   Serial.begin(SERIAL_BAUD);
+  bootId = esp_random() & 0xFFFFFF;  // fallId prefix, different on every boot
   instance.begin();
   // Turn the backlight on so the screen shows the watch is alive.
   instance.setBrightness(DEVICE_MAX_BRIGHTNESS_LEVEL);
@@ -889,6 +1048,7 @@ void setup() {
   xTaskCreatePinnedToCore(sendTask, "sendFall", SEND_TASK_STACK, nullptr, 1, nullptr, 0);
 
   if (PRINT_RAW_SAMPLES) Serial.println("t_ms,x,y,z,mag");
+  if (RUN_MODEL_SELF_TEST) runModelSelfTest();
   Serial.println("READY");
   nextSampleMs = millis();
 }
