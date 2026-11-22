@@ -368,9 +368,32 @@
 
 /* ---------- History ---------- */
 
+/* The top of the chat: who you are talking to, like a contact. */
+.chat-who {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.chat-who .msg-avatar {
+  width: 48px;
+  height: 48px;
+  flex: none;
+}
+
+.chat-who .msg-avatar svg {
+  width: 35px;
+}
+
+.chat-status {
+  font-size: 0.88rem;
+  color: var(--ink-soft);
+}
+
 .history-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
@@ -900,9 +923,9 @@
 /* The day in four numbers, as a plain row of label and value. */
 .day-facts {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 8px;
-  margin: 4px 0 14px;
+  margin: 4px 0 16px;
 }
 
 .day-facts div {
@@ -925,6 +948,19 @@
   line-height: 1.1;
   color: var(--calm-deep);
   font-variant-numeric: tabular-nums;
+}
+
+.day-facts .day-fact-text {
+  font-size: 1.05rem;
+  line-height: 1.25;
+  padding-top: 5px;
+}
+
+.care-sub {
+  margin-bottom: 4px;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--ink-soft);
 }
 
 .day-facts .day-fact-alert {

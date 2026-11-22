@@ -486,6 +486,26 @@ function NowPanel({
   )
 }
 
+// Emily's small face: next to each of her messages and in the chat header.
+function EmilyAvatar() {
+  return (
+    <span className="msg-avatar" aria-hidden="true">
+      <svg viewBox="0 0 200 160">
+        <path
+          className="msg-avatar-cloud"
+          d="M50 152C22 152 6 126 17 100c6-14 13-22 13-38 0-22 18-35 37-32C76 11 102 3 124 16c9 5 14 12 27 12 22 0 36 18 32 38-2 12 6 22 10 37 7 27-11 49-37 49Z"
+        />
+        {/* The eyes lean toward the pointer (--gaze-x / --gaze-y, set once in App). */}
+        <g className="msg-avatar-eyes">
+          <ellipse cx="76" cy="94" rx="12" ry="16" />
+          <ellipse cx="126" cy="94" rx="12" ry="16" />
+        </g>
+        <path className="msg-avatar-mouth" d="M88 122q13 10 26 0" />
+      </svg>
+    </span>
+  )
+}
+
 // Emily's level for a fall, in words.
 function levelOf(incident: Incident): string {
   if (incident.superseded) return 'Replaced by a newer fall'
@@ -587,20 +607,7 @@ function FallRow({
   // One message from Emily: how serious, how sure, what she heard, how it ended.
   return (
     <li className={`msg msg-${kind}`}>
-      <span className="msg-avatar" aria-hidden="true">
-        <svg viewBox="0 0 200 160">
-          <path
-            className="msg-avatar-cloud"
-            d="M50 152C22 152 6 126 17 100c6-14 13-22 13-38 0-22 18-35 37-32C76 11 102 3 124 16c9 5 14 12 27 12 22 0 36 18 32 38-2 12 6 22 10 37 7 27-11 49-37 49Z"
-          />
-          {/* The eyes lean toward the pointer (--gaze-x / --gaze-y, set once in App). */}
-          <g className="msg-avatar-eyes">
-            <ellipse cx="76" cy="94" rx="12" ry="16" />
-            <ellipse cx="126" cy="94" rx="12" ry="16" />
-          </g>
-          <path className="msg-avatar-mouth" d="M88 122q13 10 26 0" />
-        </svg>
-      </span>
+      <EmilyAvatar />
       <div className="msg-bubble">
         <p className="msg-meta">
           <span>Emily</span>
@@ -701,6 +708,7 @@ function History({
   onFalseAlarm: (incidentId: Id<'incidents'>, name: string) => Promise<void>
 }) {
   const { personName, familyNames } = overview
+  const watchOnline = overview.lastHeartbeat !== null && now - overview.lastHeartbeat < NO_SIGNAL_AFTER_MS
   const [clearedAt, setClearedAt] = useState<number>(readClearedAt)
   // The chat scrolls inside its own box and opens at the bottom, on the newest message.
   const chatRef = useRef<HTMLDivElement>(null)
@@ -807,7 +815,15 @@ function History({
   return (
     <section className="history">
       <div className="history-head">
-        <h2>Messages from Emily</h2>
+        <div className="chat-who">
+          <EmilyAvatar />
+          <div>
+            <h2>Emily</h2>
+            <p className="chat-status">
+              {thinking ? 'typing…' : watchOnline ? `online · watching over ${personName}` : `cannot reach ${personName}'s watch`}
+            </p>
+          </div>
+        </div>
         {incidents.length > waiting.length && (
           <button type="button" className="text-button" onClick={() => clearList(Date.now())}>
             Clear list
@@ -963,6 +979,8 @@ function Summary({ overview, now }: { overview: Overview; now: number }) {
   const report = overview.latestReport
   // The numbers are counted here, not written by the AI, so they are always right.
   const today = overview.incidents.filter((i) => dayLabel(i.createdAt, now) === 'Today' && !i.superseded)
+  const week = overview.incidents.filter((i) => now - i.createdAt < WEEK_MS && !i.superseded)
+  const last = overview.incidents[0]
   const facts = {
     falls: today.length,
     neededHelp: today.filter((i) => i.status === 'acknowledged').length,
@@ -985,7 +1003,7 @@ function Summary({ overview, now }: { overview: Overview; now: number }) {
 
   return (
     <section className="care">
-      <h2>Summary</h2>
+      <h2>{overview.personName}'s day</h2>
       <dl className="day-facts">
         <div>
           <dt>Falls today</dt>
@@ -1003,7 +1021,18 @@ function Summary({ overview, now }: { overview: Overview; now: number }) {
           <dt>Still waiting</dt>
           <dd>{facts.waiting}</dd>
         </div>
+        <div>
+          <dt>Falls this week</dt>
+          <dd>{week.length}</dd>
+        </div>
+        <div>
+          <dt>Last fall</dt>
+          <dd className="day-fact-text">
+            {last ? `${dayLabel(last.createdAt, now)}, ${timeFormat.format(last.createdAt)}` : 'None'}
+          </dd>
+        </div>
       </dl>
+      <h3 className="care-sub">Emily's note</h3>
       {report ? (
         <>
           <p className="summary-text">{report.text}</p>
