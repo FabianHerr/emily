@@ -470,6 +470,115 @@
   outline-offset: 2px;
 }
 
+/* What you wrote (right) and Emily's answers (left). */
+.say {
+  width: fit-content;
+  max-width: 82%;
+  margin: 10px 0 0 48px;
+  padding: 9px 14px 6px;
+  border-radius: 6px 20px 20px 20px;
+  background: var(--calm-soft);
+}
+
+.say p {
+  overflow-wrap: anywhere;
+}
+
+.say time {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.74rem;
+  text-align: right;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+.say-mine {
+  margin: 10px 4px 0 auto;
+  border-radius: 20px 6px 20px 20px;
+  background: var(--calm-deep);
+  color: #fff;
+}
+
+.say-mine time {
+  color: rgb(255 255 255 / 0.8);
+}
+
+.say-typing {
+  padding-bottom: 9px;
+  color: var(--ink-soft);
+  font-style: italic;
+}
+
+/* The box where you write, with a round send button. */
+.composer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.composer input {
+  flex: 1;
+  min-width: 0;
+  min-height: 48px;
+  padding: 0 18px;
+  border: 1.5px solid var(--line);
+  border-radius: 999px;
+  background: var(--paper);
+  font: inherit;
+  color: var(--ink);
+}
+
+.composer input::placeholder {
+  color: #64778a;
+}
+
+.composer input:focus-visible {
+  outline: 3px solid var(--calm-deep);
+  outline-offset: 1px;
+  border-color: var(--calm-deep);
+}
+
+.composer button {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 48px;
+  height: 48px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--calm-deep);
+  cursor: pointer;
+  transition: transform 160ms var(--ease-out), opacity 160ms ease-out;
+}
+
+.composer button svg {
+  width: 22px;
+  fill: #fff;
+}
+
+.composer button:hover {
+  transform: scale(1.05);
+}
+
+.composer button:disabled {
+  opacity: 0.45;
+  cursor: default;
+  transform: none;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 /* The date sits in a small pill in the middle, between the messages of two days. */
 .day h3 {
   width: fit-content;

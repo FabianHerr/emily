@@ -693,6 +693,27 @@ function History({
   const [clearedAt, setClearedAt] = useState<number>(readClearedAt)
   // The chat scrolls inside its own box and opens at the bottom, on the newest message.
   const chatRef = useRef<HTMLDivElement>(null)
+  // What you and Emily wrote in this visit (not saved: it starts empty on reload).
+  const askEmily = useAction(api.reports.ask)
+  const [talk, setTalk] = useState<{ id: number; mine: boolean; text: string; at: number }[]>([])
+  const [draft, setDraft] = useState('')
+  const [thinking, setThinking] = useState(false)
+  const send = async (event: React.FormEvent) => {
+    event.preventDefault()
+    const question = draft.trim()
+    if (question === '' || thinking) return
+    setDraft('')
+    setTalk((t) => [...t, { id: Date.now(), mine: true, text: question, at: Date.now() }])
+    setThinking(true)
+    let answer = 'I could not answer just now. Please try again.'
+    try {
+      answer = (await askEmily({ deviceId: DEVICE_ID, question })).text
+    } catch {
+      answer = 'No connection. Check your internet and ask again.'
+    }
+    setTalk((t) => [...t, { id: Date.now() + 1, mine: false, text: answer, at: Date.now() }])
+    setThinking(false)
+  }
   const [hidden, setHidden] = useState<string[]>(readHidden)
   const saveHidden = (ids: string[]) => {
     setHidden(ids)
@@ -765,7 +786,7 @@ function History({
     // Turning the phone changes the box's height: stay on the newest message.
     window.addEventListener('resize', toBottom)
     return () => window.removeEventListener('resize', toBottom)
-  }, [newestId, tab, shown.length])
+  }, [newestId, tab, shown.length, talk.length, thinking])
   const days: { label: string; items: Incident[] }[] = []
   for (const incident of shown) {
     const label = dayLabel(incident.createdAt, now)
@@ -830,7 +851,37 @@ function History({
             </div>
           ))
         )}
+        {talk.map((line) => (
+          <div key={line.id} className={line.mine ? 'say say-mine' : 'say'}>
+            <p>{line.text}</p>
+            <time>{timeFormat.format(line.at)}</time>
+          </div>
+        ))}
+        {thinking && (
+          <div className="say say-typing" aria-live="polite">
+            <p>Emily is typing…</p>
+          </div>
+        )}
       </div>
+      <form className="composer" onSubmit={send}>
+        <label className="sr-only" htmlFor="ask-emily">
+          Message to Emily
+        </label>
+        <input
+          id="ask-emily"
+          type="text"
+          value={draft}
+          maxLength={300}
+          autoComplete="off"
+          placeholder="Ask Emily about today"
+          onChange={(event) => setDraft(event.target.value)}
+        />
+        <button type="submit" disabled={thinking || draft.trim() === ''} aria-label="Send">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M3.4 20.4 21 12 3.4 3.6l-.1 6.5L15 12 3.3 13.9l.1 6.5Z" />
+          </svg>
+        </button>
+      </form>
       {hiddenCount > 0 && (
         <p className="care-note">
           {hiddenCount} older {hiddenCount === 1 ? 'fall is' : 'falls are'} hidden on this device.{' '}
