@@ -9,6 +9,7 @@
  */
 
 import type * as ai from "../ai.js";
+import type * as chat from "../chat.js";
 import type * as crons from "../crons.js";
 import type * as decide from "../decide.js";
 import type * as elevenlabs from "../elevenlabs.js";
@@ -32,6 +33,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   ai: typeof ai;
+  chat: typeof chat;
   crons: typeof crons;
   decide: typeof decide;
   elevenlabs: typeof elevenlabs;

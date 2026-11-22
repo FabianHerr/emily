@@ -100,4 +100,12 @@ export default defineSchema({
     .index("by_deviceId_and_createdAt", ["deviceId", "createdAt"])
     // The portal's latest daily summary, without scanning the whole feed.
     .index("by_deviceId_and_type_and_createdAt", ["deviceId", "type", "createdAt"]),
+
+  // The family's chat with Emily in the portal (convex/chat.ts). One row per message.
+  chatMessages: defineTable({
+    deviceId: v.string(),
+    role: v.union(v.literal("family"), v.literal("emily")),
+    text: v.string(),
+    createdAt: v.number(), // ms since epoch
+  }).index("by_deviceId_and_createdAt", ["deviceId", "createdAt"]),
 });

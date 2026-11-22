@@ -22,6 +22,8 @@ const WHO_STORAGE_KEY = 'emily.who'
 const CLEARED_STORAGE_KEY = 'emily.clearedAt'
 // Falls removed one by one with "Remove from list", on this device only.
 const HIDDEN_STORAGE_KEY = 'emily.hiddenFalls'
+// "Emily is typing" shows this long at most after your message.
+const TYPING_MS = 30 * 1000
 
 type Overview = NonNullable<ReturnType<typeof useQuery<typeof api.portal.overview>>>
 type Incident = Overview['incidents'][number]
@@ -693,26 +695,24 @@ function History({
   const [clearedAt, setClearedAt] = useState<number>(readClearedAt)
   // The chat scrolls inside its own box and opens at the bottom, on the newest message.
   const chatRef = useRef<HTMLDivElement>(null)
-  // What you and Emily wrote in this visit (not saved: it starts empty on reload).
-  const askEmily = useAction(api.reports.ask)
-  const [talk, setTalk] = useState<{ id: number; mine: boolean; text: string; at: number }[]>([])
+  // The chat lives in Convex (convex/chat.ts): it is saved, and every device sees it.
+  const talk = useQuery(api.chat.list, { deviceId: DEVICE_ID }) ?? []
+  const sendMessage = useMutation(api.chat.send)
   const [draft, setDraft] = useState('')
-  const [thinking, setThinking] = useState(false)
+  const lastLine = talk[talk.length - 1]
+  // Emily is writing while the newest message is ours and still fresh.
+  const thinking = lastLine !== undefined && lastLine.role === 'family' && now - lastLine.createdAt < TYPING_MS
   const send = async (event: React.FormEvent) => {
     event.preventDefault()
-    const question = draft.trim()
-    if (question === '' || thinking) return
+    const text = draft.trim()
+    if (text === '') return
     setDraft('')
-    setTalk((t) => [...t, { id: Date.now(), mine: true, text: question, at: Date.now() }])
-    setThinking(true)
-    let answer = 'I could not answer just now. Please try again.'
     try {
-      answer = (await askEmily({ deviceId: DEVICE_ID, question })).text
+      await sendMessage({ deviceId: DEVICE_ID, text })
     } catch {
-      answer = 'No connection. Check your internet and ask again.'
+      // Put the text back so it is not lost.
+      setDraft(text)
     }
-    setTalk((t) => [...t, { id: Date.now() + 1, mine: false, text: answer, at: Date.now() }])
-    setThinking(false)
   }
   const [hidden, setHidden] = useState<string[]>(readHidden)
   const saveHidden = (ids: string[]) => {
@@ -852,9 +852,9 @@ function History({
           ))
         )}
         {talk.map((line) => (
-          <div key={line.id} className={line.mine ? 'say say-mine' : 'say'}>
+          <div key={line._id} className={line.role === 'family' ? 'say say-mine' : 'say'}>
             <p>{line.text}</p>
-            <time>{timeFormat.format(line.at)}</time>
+            <time>{timeFormat.format(line.createdAt)}</time>
           </div>
         ))}
         {thinking && (
@@ -876,7 +876,7 @@ function History({
           placeholder="Ask Emily about today"
           onChange={(event) => setDraft(event.target.value)}
         />
-        <button type="submit" disabled={thinking || draft.trim() === ''} aria-label="Send">
+        <button type="submit" disabled={draft.trim() === ''} aria-label="Send">
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M3.4 20.4 21 12 3.4 3.6l-.1 6.5L15 12 3.3 13.9l.1 6.5Z" />
           </svg>
